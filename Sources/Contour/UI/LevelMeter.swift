@@ -1,15 +1,19 @@
 import SwiftUI
 
-/// Two-channel peak meter on a dB scale, drawn in a single `Canvas` pass.
+/// Two-channel peak meter, drawn in a single `Canvas` pass.
 ///
-/// The filled bar is the falling level; the tick is the short-term peak hold,
-/// which is what makes a transient visible at all on a bar that decays.
+/// The scale runs to **+6 dBFS**, not 0. Everything upstream is 32-bit float,
+/// where 0 dBFS is just the value 1.0 and not a ceiling — real material with
+/// intersample overs sits above it routinely. Stopping the bar at 0 would pin
+/// it at full width and throw away exactly the information worth seeing. The
+/// 0 dB line is marked so "how far over" is readable at a glance.
 struct LevelMeter: View {
     var left: ChannelMeter
     var right: ChannelMeter
     var isActive: Bool = true
 
     private let floor = Decibels.silenceFloor
+    private let ceiling: Float = 6
     private let barHeight: CGFloat = 5
     private let spacing: CGFloat = 2
 
@@ -17,6 +21,7 @@ struct LevelMeter: View {
         Canvas(rendersAsynchronously: false) { context, size in
             draw(&context, size: size, meter: left, row: 0)
             draw(&context, size: size, meter: right, row: 1)
+            drawUnityMark(&context, size: size)
         }
         .frame(height: barHeight * 2 + spacing)
         .opacity(isActive ? 1 : 0.35)
@@ -25,7 +30,7 @@ struct LevelMeter: View {
     }
 
     private func fraction(_ db: Float) -> CGFloat {
-        CGFloat(max(0, min(1, (db - floor) / -floor)))
+        CGFloat(max(0, min(1, (db - floor) / (ceiling - floor))))
     }
 
     private func draw(_ context: inout GraphicsContext,
@@ -52,10 +57,21 @@ struct LevelMeter: View {
         }
     }
 
+    /// 0 dBFS: below it nothing can clip, above it the float→integer conversion
+    /// into the interface will.
+    private func drawUnityMark(_ context: inout GraphicsContext, size: CGSize) {
+        let x = size.width * fraction(0)
+        var path = Path()
+        path.move(to: CGPoint(x: x, y: -1))
+        path.addLine(to: CGPoint(x: x, y: barHeight * 2 + spacing + 1))
+        context.stroke(path, with: .color(.primary.opacity(0.45)),
+                       style: StrokeStyle(lineWidth: 1, dash: [1.5, 1.5]))
+    }
+
     private func color(for level: Float) -> Color {
         switch level {
         case ..<(-6): .green
-        case ..<(-1): .yellow
+        case ..<0: .yellow
         default: .red
         }
     }
