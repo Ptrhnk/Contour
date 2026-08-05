@@ -10,6 +10,9 @@ import SwiftUI
 struct EQWindowView: View {
     @Bindable var engine: AudioEngine
 
+    /// Floating by default: Contour has no Dock icon and no ⌘-Tab entry, so a
+    /// window that falls behind another app is genuinely hard to retrieve.
+    @AppStorage("eqWindowFloating") private var isFloating = true
     @State private var chain: Chain = .a
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
@@ -61,10 +64,7 @@ struct EQWindowView: View {
         }
         .padding(16)
         .frame(minWidth: 720, minHeight: 520)
-        .onAppear {
-            // LSUIElement apps do not come forward on their own.
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        .background(WindowConfigurator(isFloating: isFloating).frame(width: 0, height: 0))
     }
 
     // MARK: - Toolbar
@@ -104,6 +104,15 @@ struct EQWindowView: View {
             }
             .disabled(settings.wrappedValue.eq.bands.allSatisfy { $0.gainDB == 0 })
             Toggle("Adapt. Q", isOn: settings.eq.adaptiveQ).toggleStyle(.checkbox)
+
+            Spacer()
+
+            Toggle(isOn: $isFloating) {
+                Image(systemName: isFloating ? "pin.fill" : "pin.slash")
+            }
+            .toggleStyle(.button)
+            .help("Keep this window above other apps. Contour has no Dock icon, "
+                  + "so an unpinned window can be hard to find again.")
         }
     }
 

@@ -4,7 +4,6 @@ CONFIG       ?= release
 IDENTITY     ?= Contour Dev
 ENTITLEMENTS := Contour.entitlements
 INFO_PLIST   := Resources/Info.plist
-AGENT_PLIST  := Resources/com.nahak.contour.agent.plist
 BUILD_DIR    := build
 APP          := $(BUILD_DIR)/$(APP_NAME).app
 
@@ -21,11 +20,9 @@ build:
 bundle: build
 	@bin=$$(swift build -c $(CONFIG) --show-bin-path)/$(APP_NAME); \
 	rm -rf "$(APP)"; \
-	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources" \
-		"$(APP)/Contents/Library/LaunchAgents"; \
+	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"; \
 	cp "$$bin" "$(APP)/Contents/MacOS/$(APP_NAME)"; \
 	cp "$(INFO_PLIST)" "$(APP)/Contents/Info.plist"; \
-	cp "$(AGENT_PLIST)" "$(APP)/Contents/Library/LaunchAgents/"; \
 	echo "assembled $(APP)"
 
 ## Sign with a stable identity AND an explicitly pinned designated requirement.

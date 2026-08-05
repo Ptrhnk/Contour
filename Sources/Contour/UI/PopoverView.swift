@@ -2,9 +2,9 @@ import SwiftUI
 
 struct PopoverView: View {
     @Bindable var engine: AudioEngine
+    var launchAgent: LaunchAgent
     @Environment(\.openWindow) private var openWindow
     @State private var editingChain: Chain = .a
-    @State private var launchAgent = LaunchAgent()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -189,10 +189,10 @@ struct PopoverView: View {
                         set: { launchAgent.setEnabled($0) }))
                         .toggleStyle(.checkbox)
                         .font(.caption)
-                    if launchAgent.needsApproval {
-                        Button("Approve…") { launchAgent.openLoginItemsSettings() }
+                    if launchAgent.isEnabled {
+                        Button("Login Items…") { launchAgent.openLoginItemsSettings() }
                             .controlSize(.small)
-                            .help("macOS is holding this pending your approval in Login Items")
+                            .help("Contour appears there as a background item")
                     }
                 }
                 .help("With BlackHole as the system output, nothing drains it while "
