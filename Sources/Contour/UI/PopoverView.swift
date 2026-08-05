@@ -176,7 +176,12 @@ struct PopoverView: View {
 
     private var interfaceSelection: Binding<String> {
         Binding(get: { engine.interface?.uid ?? "" },
-                set: { engine.interfaceUID = $0.isEmpty ? nil : $0 })
+                set: { selected in
+                    // The Picker echoes the getter back on first layout; that is
+                    // not a user choice and must not count as one.
+                    guard selected != engine.interface?.uid else { return }
+                    engine.interfaceUID = selected.isEmpty ? nil : selected
+                })
     }
 
     private var latencyText: String {
@@ -212,9 +217,7 @@ private struct ChainSection: View {
     private static let gainRange =
         Double(ChainSettings.gainRange.lowerBound)...Double(ChainSettings.gainRange.upperBound)
 
-    private var isActive: Bool {
-        chain == .a ? engine.destination.includesA : engine.destination.includesB
-    }
+    private var isActive: Bool { engine.isChainActive(chain) }
 
     private var settings: Binding<ChainSettings> {
         chain == .a ? $engine.chainA : $engine.chainB
@@ -230,6 +233,8 @@ private struct ChainSection: View {
                 Spacer()
                 if !isActive { Text("off").font(.caption).foregroundStyle(.secondary) }
             }
+
+            PresetBar(engine: engine, chain: chain)
 
             ChainMeterRow(engine: engine, chain: chain, isActive: isActive)
 

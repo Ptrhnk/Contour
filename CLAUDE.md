@@ -49,6 +49,7 @@ Makefile. This is not a workaround to be replaced with an Xcode project.
 | EQ built in-house, not `AUNBandEQ` | Its generic parameter-list UI cannot do grab-a-handle-and-drag, which is the point. ~200 lines of DSP costs less RAM too. |
 | No cross-chain latency compensation | Comb filtering needs one listener hearing both chains. Two people on two headphone pairs each hear only their own. Dropped permanently, not deferred. |
 | Inactive chains are torn down, not bypassed | Plugins deallocated, RAM returned. |
+| Presets are a **single shared library**, not per chain | Departs from the spec. A pair of headphones arrives on chain B through the interface's 3/4 pair, or on chain A as a stereo-only Bluetooth device. Per-chain lists would hide a headphone curve from half the ways you can plug those headphones in. |
 | Plugins referenced by *any preset of an active chain* stay instantiated but bypassed | Makes preset switching the click-free fast path. `Unload unused plugins` action exists for when RAM matters more. |
 | No installer, notarization, DMG, auto-update, App Store | Repo is the distribution channel. |
 | BlackHole stays unbundled | Link the official installer from the README. Also avoids interacting with its GPL-3.0. MIT for this repo. |
@@ -181,6 +182,56 @@ leaf views (`MeterRows.swift`) — keep them there.
 There is no Xcode on this machine, only Command Line Tools, so **XCTest is not
 available**. Tests use swift-testing (`import Testing`, `@Test`, `#expect`),
 which CLT does ship. `swift test` runs them.
+
+### Startup gate — do not remove
+
+A device's first buffers after starting can contain stale ring-buffer memory,
+measured at magnitudes of **5 to 12 (+14 to +21 dBFS)**. Passed through to
+headphones that is dangerous, not merely ugly.
+
+It is **not deterministic** — it depends on what the device last held, so a
+fixed-length mute is not reliably long enough. The gate instead holds the input
+silent until it has read below +12 dBFS for three consecutive blocks (minimum
+0.1 s), then fades in, with a 2 s hard timeout so a genuinely hot source still
+plays. Applied to the input *before* the EQ, so those values cannot ring the
+biquads either.
+
+Runs on every start, which includes device changes and sample-rate rebuilds —
+exactly when the burst was audible.
+
+### Swift traps that produced audible bugs
+
+**`didSet` runs during `init`.** A property with a default value — including
+any `Optional`, which is implicitly `nil` — is already initialised when the
+`init` body runs, so assigning the persisted value there *is* a re-assignment
+and fires the observer. Restoring settings therefore scheduled a restart before
+the engine had started: the app started twice and faded in twice. `AudioEngine`
+guards every observer with `isLoading`, cleared at the end of `init`.
+
+**A `Picker`'s binding writes back on first layout.** That is not a user
+choice. `interfaceUID` restarts only when the *resolved* device changes.
+
+### Core Audio property listeners match the address exactly
+
+`kAudioDevicePropertyNominalSampleRate` is **global scope**. Registering it
+against `kAudioObjectPropertyScopeOutput` silently never fires — measured:
+
+```
+global-scope listener fired: 1x   output-scope listener fired: 0x
+```
+
+This is not cosmetic. EQ coefficients are computed for a specific sample rate,
+so an undetected rate change detunes every band. A drift backstop in the meter
+poll compares the aggregate's actual rate against the engine's and rebuilds if
+they diverge, in case a notification is ever missed again.
+
+### Chain activity on a stereo-only device
+
+`isChainActive(_:)` is the single source of truth, read by both the audio thread
+and the UI. On a stereo device chain A is always active whatever the destination
+says — otherwise a destination of Headphones left over from a four-output
+interface silences the app completely, and the destination picker is hidden on
+such devices so there is no way back.
 
 ### Realtime rules
 

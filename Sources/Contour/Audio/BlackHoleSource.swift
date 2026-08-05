@@ -17,6 +17,28 @@ final class BlackHoleSource: AudioSource {
         let pairB: ChannelPairSlot?
         let render: RenderBlock
 
+        /// Startup gate. The first buffers a device hands back after starting
+        /// can contain stale ring-buffer memory — measured at magnitudes of 5
+        /// to 12, i.e. +14 to +21 dBFS. That is a dangerous noise burst, and it
+        /// is not deterministic: it depends on what the device last held, so a
+        /// fixed-length mute is not reliably long enough.
+        ///
+        /// Instead the input is held silent until it has actually looked sane
+        /// for a few consecutive blocks, then faded in. All realtime-thread only.
+        let minimumMuteFrames: Int
+        let maximumMuteFrames: Int
+        let fadeFrames: Int
+        var framesSinceStart: Int = 0
+        var fadeStartFrame: Int = 0
+        var calmBlocks: Int = 0
+        var isArmed = false
+        var isStartupComplete = false
+
+        /// Above this, a block is stale memory rather than audio. Real material
+        /// including intersample overs stays well under +12 dBFS.
+        static let sanityThreshold: Float = 4
+        static let requiredCalmBlocks = 3
+
         // Word-sized plain stores from the realtime thread, read from the main
         // thread for display only. A torn read of a meter is not worth a lock.
         var callbacks: UInt64 = 0
@@ -37,10 +59,15 @@ final class BlackHoleSource: AudioSource {
         var outBufferCount: Int = 0
 
         init(capacity: Int,
+             sampleRate: Double,
              inputPair: ChannelPairSlot,
              pairA: ChannelPairSlot?,
              pairB: ChannelPairSlot?,
              render: @escaping RenderBlock) {
+            let rate = sampleRate > 0 ? sampleRate : 44_100
+            minimumMuteFrames = Int(rate * 0.10)
+            maximumMuteFrames = Int(rate * 2.0)
+            fadeFrames = Int(rate * 2.0)
             self.capacity = capacity
             self.inputPair = inputPair
             self.pairA = pairA
@@ -115,6 +142,10 @@ final class BlackHoleSource: AudioSource {
                       channelPeaks: (0..<count).map { state.inPeaks[$0] })
     }
 
+    /// The rate the aggregate is actually running at right now, which is not
+    /// necessarily the rate it was built with.
+    var currentSampleRate: Double { aggregate?.sampleRate ?? 0 }
+
     /// Reads the accumulated peaks and clears them, so the next read reports the
     /// interval since this one. Racing the audio thread here can at worst drop a
     /// single callback's peak, which is not worth a lock on a meter.
@@ -168,6 +199,7 @@ final class BlackHoleSource: AudioSource {
             outputLatencyFrames = aggregate.outputLatencyFrames
 
             let state = RenderState(capacity: Self.scratchCapacity,
+                                    sampleRate: rate,
                                     inputPair: inputPair,
                                     pairA: pairA,
                                     pairB: pairB,
@@ -287,6 +319,8 @@ final class BlackHoleSource: AudioSource {
             vDSP_vclr(state.inR, 1, vDSP_Length(frames))
         }
 
+        applyStartupGate(state, frames)
+
         vDSP_vclr(state.aL, 1, vDSP_Length(frames))
         vDSP_vclr(state.aR, 1, vDSP_Length(frames))
         vDSP_vclr(state.bL, 1, vDSP_Length(frames))
@@ -314,6 +348,55 @@ final class BlackHoleSource: AudioSource {
         accumulate(state.bR, frames, into: &state.chainBPeakR)
         state.lastFrames = frames
         state.callbacks &+= 1
+    }
+
+    /// Hold silent until the input looks like audio, then fade in. Applied to
+    /// the input before anything downstream, so stale memory cannot reach the
+    /// biquads and ring them either.
+    @inline(__always)
+    private static func applyStartupGate(_ state: RenderState, _ frames: Int) {
+        guard !state.isStartupComplete else { return }
+        let count = vDSP_Length(frames)
+        state.framesSinceStart += frames
+
+        if !state.isArmed {
+            var peakL: Float = 0
+            var peakR: Float = 0
+            vDSP_maxmgv(state.inL, 1, &peakL, count)
+            vDSP_maxmgv(state.inR, 1, &peakR, count)
+
+            let calm = max(peakL, peakR) <= RenderState.sanityThreshold
+            state.calmBlocks = calm ? state.calmBlocks + 1 : 0
+
+            let waitedLongEnough = state.framesSinceStart >= state.minimumMuteFrames
+            let settled = state.calmBlocks >= RenderState.requiredCalmBlocks
+            // Never stay muted forever: a genuinely hot source must still play.
+            let timedOut = state.framesSinceStart >= state.maximumMuteFrames
+
+            if (waitedLongEnough && settled) || timedOut {
+                state.isArmed = true
+                state.fadeStartFrame = state.framesSinceStart
+            }
+            vDSP_vclr(state.inL, 1, count)
+            vDSP_vclr(state.inR, 1, count)
+            return
+        }
+
+        let elapsed = state.framesSinceStart - state.fadeStartFrame
+        guard elapsed < state.fadeFrames else {
+            state.isStartupComplete = true
+            return
+        }
+        let from = Float(max(elapsed - frames, 0)) / Float(state.fadeFrames)
+        let to = Float(min(elapsed, state.fadeFrames)) / Float(state.fadeFrames)
+        let step = (to - from) / Float(frames)
+        // vDSP_vrampmul advances `start`, so each channel needs its own copy.
+        var start = from
+        var increment = step
+        vDSP_vrampmul(state.inL, 1, &start, &increment, state.inL, 1, count)
+        start = from
+        increment = step
+        vDSP_vrampmul(state.inR, 1, &start, &increment, state.inR, 1, count)
     }
 
     @inline(__always)

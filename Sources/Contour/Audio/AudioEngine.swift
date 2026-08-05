@@ -96,7 +96,7 @@ final class AudioEngine {
 
     var destination: Destination = .both {
         didSet {
-            guard destination != oldValue else { return }
+            guard !isLoading, destination != oldValue else { return }
             defaults.set(destination.rawValue, forKey: Keys.destination)
             publishParameters()
         }
@@ -104,7 +104,7 @@ final class AudioEngine {
 
     var chainA = ChainSettings() {
         didSet {
-            guard chainA != oldValue else { return }
+            guard !isLoading, chainA != oldValue else { return }
             save(chainA, forKey: Keys.chainA)
             publishParameters()
             if chainA.eq != oldValue.eq { eqA.update(settings: chainA.eq, sampleRate: eqSampleRate) }
@@ -113,7 +113,7 @@ final class AudioEngine {
 
     var chainB = ChainSettings() {
         didSet {
-            guard chainB != oldValue else { return }
+            guard !isLoading, chainB != oldValue else { return }
             save(chainB, forKey: Keys.chainB)
             publishParameters()
             if chainB.eq != oldValue.eq { eqB.update(settings: chainB.eq, sampleRate: eqSampleRate) }
@@ -121,10 +121,19 @@ final class AudioEngine {
     }
 
     /// Persisted so the choice survives relaunches; auto-picked when unset.
+    ///
+    /// Restarts only when the *resolved* device actually changes. Storing a UID
+    /// for a device that is not plugged in resolves to the auto-picked one, and
+    /// several paths — notably the interface `Picker` writing its selection back
+    /// on first layout — set this to a value that changes nothing. Restarting on
+    /// those re-runs the startup mute and fade, which is audible.
     var interfaceUID: String? {
         didSet {
-            guard interfaceUID != oldValue else { return }
+            guard !isLoading, interfaceUID != oldValue else { return }
             defaults.set(interfaceUID, forKey: Keys.interfaceUID)
+            let previous = interface?.uid
+            refreshEnvironment()
+            guard interface?.uid != previous else { return }
             restart()
         }
     }
@@ -143,7 +152,16 @@ final class AudioEngine {
         static let destination = "destination"
         static let chainA = "chainA"
         static let chainB = "chainB"
+        static let presetA = "loadedPresetA"
+        static let presetB = "loadedPresetB"
     }
+
+    /// Loading persisted settings in `init` re-assigns properties that already
+    /// hold their defaults, and Swift *does* run `didSet` for that. Without this
+    /// guard, restoring the saved interface schedules a restart before the
+    /// engine has even started, which shows up as the app starting twice and
+    /// fading in twice.
+    private var isLoading = true
 
     private let defaults = UserDefaults.standard
     private let parameters = TripleBuffer<EngineParameters>(EngineParameters())
@@ -154,6 +172,19 @@ final class AudioEngine {
                               sampleRate: 44_100)
     private let eqB = ChainEQ(maximumFrames: BlackHoleSource.scratchCapacity,
                               sampleRate: 44_100)
+
+    // Gain and trim are ramped rather than applied as a step, so loading a
+    // preset that changes level does not click.
+    private let trimRampA = GainRamp()
+    private let trimRampB = GainRamp()
+    private let gainRampA = GainRamp()
+    private let gainRampB = GainRamp()
+
+    let presets = PresetStore()
+
+    /// Which preset each chain currently has loaded, if any.
+    private(set) var loadedPresetA: UUID?
+    private(set) var loadedPresetB: UUID?
 
     func eq(for chain: Chain) -> ChainEQ { chain == .a ? eqA : eqB }
 
@@ -170,6 +201,9 @@ final class AudioEngine {
             .flatMap(Destination.init(rawValue:)) ?? .both
         chainA = load(Keys.chainA) ?? ChainSettings()
         chainB = load(Keys.chainB) ?? ChainSettings()
+        loadedPresetA = defaults.string(forKey: Keys.presetA).flatMap(UUID.init(uuidString:))
+        loadedPresetB = defaults.string(forKey: Keys.presetB).flatMap(UUID.init(uuidString:))
+        isLoading = false
         publishParameters()
         publishEQ()
         installHardwareListeners()
@@ -192,6 +226,18 @@ final class AudioEngine {
     /// and the destination switch is hidden rather than shown broken.
     var supportsTwoChains: Bool { outputPairCount >= 2 }
 
+    /// Single source of truth for "does this chain render".
+    ///
+    /// On a stereo-only device chain A is always active, whatever the
+    /// destination says. Otherwise a destination of Headphones left over from a
+    /// four-output interface silences the app completely — chain B does not
+    /// exist to render and chain A has been switched off — and the destination
+    /// picker is hidden on such devices, so there is no way back.
+    func isChainActive(_ chain: Chain) -> Bool {
+        guard supportsTwoChains else { return chain == .a }
+        return chain == .a ? destination.includesA : destination.includesB
+    }
+
     func refreshEnvironment() {
         systemOutput = AudioDevices.defaultOutputDevice()
         let blackHole = AudioDevices.blackHole()
@@ -203,6 +249,10 @@ final class AudioEngine {
             interface = AudioDevices.preferredInterface()
         }
         interfaceVolume = interface.flatMap(AudioDevices.outputVolumeScalar)
+        // Channel count decides how many chains exist, which decides which are
+        // active. Swapping a 4-output interface for a stereo one must re-derive
+        // that, not leave a stale "off".
+        publishParameters()
     }
 
     var interfaceHasSoftwareVolume: Bool { interfaceVolume != nil }
@@ -249,7 +299,6 @@ final class AudioEngine {
         refreshEnvironment()
 
         microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio)
-        Self.log.notice("start: microphoneAccess=\(self.microphoneAccess.rawValue, privacy: .public)")
         switch microphoneAccess {
         case .notDetermined:
             setStatus(.waiting("Contour needs microphone access to read system audio "
@@ -297,7 +346,11 @@ final class AudioEngine {
             publishEQ()
             status = .running
             installInterfaceListeners()
-            Self.log.notice("started\n\(source.layoutDescription, privacy: .public)")
+            Self.log.notice("""
+                started engineSampleRate=\(self.sampleRate, privacy: .public) \
+                interfaceSampleRate=\(interface.sampleRate, privacy: .public)
+                \(source.layoutDescription, privacy: .public)
+                """)
         } catch {
             self.source = nil
             setStatus(.failed("\(error)"))
@@ -356,6 +409,58 @@ final class AudioEngine {
         refreshEnvironment()
     }
 
+    // MARK: - Presets
+
+    func loadedPresetID(for chain: Chain) -> UUID? {
+        chain == .a ? loadedPresetA : loadedPresetB
+    }
+
+    func loadedPreset(for chain: Chain) -> Preset? {
+        presets.preset(id: loadedPresetID(for: chain))
+    }
+
+    /// Whether the chain has drifted from the preset it was loaded from.
+    /// Silently discarding an hour of tweaking on a preset switch is the kind of
+    /// thing that makes a tool untrustworthy, so this is surfaced.
+    func hasUnsavedChanges(_ chain: Chain) -> Bool {
+        guard let preset = loadedPreset(for: chain) else { return false }
+        return preset.settings != settings(for: chain)
+    }
+
+    private func setLoadedPreset(_ id: UUID?, for chain: Chain) {
+        if chain == .a {
+            loadedPresetA = id
+            defaults.set(id?.uuidString, forKey: Keys.presetA)
+        } else {
+            loadedPresetB = id
+            defaults.set(id?.uuidString, forKey: Keys.presetB)
+        }
+    }
+
+    /// EQ coefficients ramp through SetTargets and gain through `GainRamp`, so
+    /// this is click-free without any special handling.
+    func loadPreset(_ preset: Preset, into chain: Chain) {
+        setSettings(preset.settings, for: chain)
+        setLoadedPreset(preset.id, for: chain)
+    }
+
+    func savePresetAsNew(named name: String, from chain: Chain) {
+        let preset = presets.add(name: name, settings: settings(for: chain))
+        setLoadedPreset(preset.id, for: chain)
+    }
+
+    func updateLoadedPreset(from chain: Chain) {
+        guard let id = loadedPresetID(for: chain) else { return }
+        presets.update(id: id, settings: settings(for: chain))
+    }
+
+    func deletePreset(_ id: UUID) {
+        presets.delete(id: id)
+        for chain in Chain.allCases where loadedPresetID(for: chain) == id {
+            setLoadedPreset(nil, for: chain)
+        }
+    }
+
     // MARK: - Parameters
 
     /// Trim actually sent to the audio thread. Auto-trim is derived here rather
@@ -371,12 +476,11 @@ final class AudioEngine {
     }
 
     private func publishParameters() {
-        let twoChains = supportsTwoChains
         parameters.publish(EngineParameters(
-            a: ChainParameters(isActive: destination.includesA,
+            a: ChainParameters(isActive: isChainActive(.a),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .a)),
                                outputGain: Decibels.toLinear(chainA.outputGainDB)),
-            b: ChainParameters(isActive: twoChains && destination.includesB,
+            b: ChainParameters(isActive: isChainActive(.b),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .b)),
                                outputGain: Decibels.toLinear(chainB.outputGainDB))))
     }
@@ -398,28 +502,32 @@ final class AudioEngine {
         let parameters = self.parameters
         let eqA = self.eqA
         let eqB = self.eqB
+        let trimRampA = self.trimRampA
+        let trimRampB = self.trimRampB
+        let gainRampA = self.gainRampA
+        let gainRampB = self.gainRampB
         return { buffers in
             let values = parameters.current()
             let frames = buffers.frameCount
-            let length = vDSP_Length(frames)
+            let bytes = frames * MemoryLayout<Float>.size
 
             if values.a.isActive {
-                var trim = values.a.inputTrim
-                vDSP_vsmul(buffers.inputL, 1, &trim, buffers.chainAL, 1, length)
-                vDSP_vsmul(buffers.inputR, 1, &trim, buffers.chainAR, 1, length)
+                memcpy(buffers.chainAL, buffers.inputL, bytes)
+                memcpy(buffers.chainAR, buffers.inputR, bytes)
+                trimRampA.apply(target: values.a.inputTrim,
+                                left: buffers.chainAL, right: buffers.chainAR, frames: frames)
                 eqA.process(left: buffers.chainAL, right: buffers.chainAR, frames: frames)
-                var gain = values.a.outputGain
-                vDSP_vsmul(buffers.chainAL, 1, &gain, buffers.chainAL, 1, length)
-                vDSP_vsmul(buffers.chainAR, 1, &gain, buffers.chainAR, 1, length)
+                gainRampA.apply(target: values.a.outputGain,
+                                left: buffers.chainAL, right: buffers.chainAR, frames: frames)
             }
             if values.b.isActive {
-                var trim = values.b.inputTrim
-                vDSP_vsmul(buffers.inputL, 1, &trim, buffers.chainBL, 1, length)
-                vDSP_vsmul(buffers.inputR, 1, &trim, buffers.chainBR, 1, length)
+                memcpy(buffers.chainBL, buffers.inputL, bytes)
+                memcpy(buffers.chainBR, buffers.inputR, bytes)
+                trimRampB.apply(target: values.b.inputTrim,
+                                left: buffers.chainBL, right: buffers.chainBR, frames: frames)
                 eqB.process(left: buffers.chainBL, right: buffers.chainBR, frames: frames)
-                var gain = values.b.outputGain
-                vDSP_vsmul(buffers.chainBL, 1, &gain, buffers.chainBL, 1, length)
-                vDSP_vsmul(buffers.chainBR, 1, &gain, buffers.chainBR, 1, length)
+                gainRampB.apply(target: values.b.outputGain,
+                                left: buffers.chainBL, right: buffers.chainBR, frames: frames)
             }
         }
     }
@@ -441,6 +549,21 @@ final class AudioEngine {
                     continue
                 }
                 let interval = idle ? 0.5 : 0.05
+
+                // Backstop for a missed rate-change notification. This is not
+                // cosmetic: EQ coefficients are computed for a specific sample
+                // rate, so running at a rate we do not know about detunes every
+                // band.
+                let actual = source.currentSampleRate
+                if actual > 0, abs(actual - self.sampleRate) > 1 {
+                    Self.log.error("""
+                        sample rate drifted: engine=\(self.sampleRate, privacy: .public) \
+                        aggregate=\(actual, privacy: .public) — rebuilding
+                        """)
+                    self.restart()
+                    continue
+                }
+
                 let meters = source.consumeMeters()
                 self.meters = meters
                 self.levels = Self.advance(self.levels, with: meters, interval: interval)
@@ -553,15 +676,27 @@ final class AudioEngine {
     private func installInterfaceListeners() {
         interfaceListeners.removeAll()
         guard let interface else { return }
-        for selector in [kAudioDevicePropertyNominalSampleRate,
-                         kAudioDevicePropertyStreamConfiguration] {
+
+        // Scope matters: Core Audio matches a listener's address exactly.
+        // kAudioDevicePropertyNominalSampleRate is a *global* property, so
+        // registering it against the output scope silently never fires.
+        let watched: [(AudioObjectPropertySelector, AudioObjectPropertyScope)] = [
+            (kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal),
+            (kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput),
+        ]
+        for (selector, scope) in watched {
             interfaceListeners.append(PropertyListener(
                 object: interface.id,
-                address: CA.address(selector, scope: kAudioObjectPropertyScopeOutput),
+                address: CA.address(selector, scope: scope),
                 queue: listenerQueue) { [weak self] in
-                    Task { @MainActor in self?.restart() }
+                    Task { @MainActor in
+                        AudioEngine.log.notice(
+                            "interface property changed: \(CA.describe(OSStatus(bitPattern: selector)), privacy: .public)")
+                        self?.restart()
+                    }
                 })
         }
+
         // Volume changed elsewhere (System Settings, the headphones themselves).
         let volumeAddress = CA.address(kAudioDevicePropertyVolumeScalar,
                                        scope: kAudioObjectPropertyScopeOutput)
@@ -587,10 +722,20 @@ final class AudioEngine {
         case .running:
             // Interface gone or re-clocked: the aggregate is stale either way.
             if interface?.uid != previousInterfaceUID || interface?.sampleRate != previousSampleRate {
+                Self.log.notice("""
+                    hardware change -> restart: \
+                    uid \(previousInterfaceUID ?? "nil", privacy: .public) -> \
+                    \(self.interface?.uid ?? "nil", privacy: .public), \
+                    rate \(previousSampleRate ?? -1, privacy: .public) -> \
+                    \(self.interface?.sampleRate ?? -1, privacy: .public)
+                    """)
                 restart()
             }
         case .waiting:
-            if interface != nil, capture != nil, microphoneAccess == .authorized { restart() }
+            if interface != nil, capture != nil, microphoneAccess == .authorized {
+                Self.log.notice("hardware change -> restart from waiting")
+                restart()
+            }
         case .stopped, .failed:
             break
         }
@@ -607,6 +752,7 @@ final class AudioEngine {
             Task { @MainActor in
                 // USB interfaces re-enumerate for a second or two after wake.
                 try? await Task.sleep(for: .seconds(2))
+                AudioEngine.log.notice("didWake -> start")
                 self?.start()
             }
         }
