@@ -4,10 +4,18 @@ A macOS menu-bar utility that splits system audio into two independently
 processed paths on a single multi-channel interface: speakers on outputs 1/2,
 headphones on outputs 3/4, each with its own EQ and output gain.
 
-It exists to solve one annoyance. Switching between speakers and headphones
-normally means changing the system output device *and* turning a hardware volume
-knob, because the two sit at different levels. Contour gives each path its own
-output gain, set once, so switching is one click and no knob.
+It exists for two reasons.
+
+**There is no free parametric EQ for system audio on macOS.** The usual way to
+get one is to leave a DAW running in the background purely to host an EQ and a
+couple of plugins — which works, but costs a gigabyte of RAM and a launch every
+time you sit down, to use perhaps two percent of the application. Contour is
+the EQ and the plugin chain without the DAW around them.
+
+**Switching between speakers and headphones is two actions, not one.** You
+change the system output device *and* turn a hardware volume knob, because the
+two sit at different levels. Contour gives each path its own output gain, set
+once, so switching is one click and no knob.
 
 Not a product. The repo is the distribution channel — clone it, build it, run it.
 
