@@ -52,6 +52,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         terminateIfAlreadyRunning()
     }
+
+    /// Right-click on the menu bar icon offers Quit.
+    ///
+    /// `MenuBarExtra` does not expose its `NSStatusItem`, so there is nothing to
+    /// hang a context menu on. Instead a local event monitor catches the right
+    /// click before it reaches the status item and returns nil to consume it, so
+    /// the popover does not open as well.
+    private var statusItemRightClickMonitor: Any?
+
+    private func installStatusItemContextMenu() {
+        statusItemRightClickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.rightMouseDown]
+        ) { [weak self] event in
+            guard let self,
+                  let window = event.window,
+                  NSStringFromClass(type(of: window)).contains("StatusBarWindow"),
+                  let view = window.contentView
+            else { return event }
+            self.showStatusItemMenu(over: view)
+            return nil
+        }
+    }
+
+    private func showStatusItemMenu(over view: NSView) {
+        let menu = NSMenu()
+        let quit = NSMenuItem(title: "Quit Contour",
+                              action: #selector(NSApplication.terminate(_:)),
+                              keyEquivalent: "q")
+        quit.target = NSApp
+        menu.addItem(quit)
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: view.bounds.height + 4),
+                   in: view)
+    }
     let engine = AudioEngine()
     /// Owned here rather than by the popover: the agent repairs its registration
     /// on launch, which must happen whether or not the popover is ever opened.
@@ -62,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // incidental, the audio engine is the point, so the process must
         // outlive every window.
         ProcessInfo.processInfo.disableAutomaticTermination("Contour renders audio continuously")
+        installStatusItemContextMenu()
         engine.start()
     }
 
