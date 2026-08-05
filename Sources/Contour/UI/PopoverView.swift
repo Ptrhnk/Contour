@@ -3,6 +3,7 @@ import SwiftUI
 struct PopoverView: View {
     @Bindable var engine: AudioEngine
     @State private var editingChain: Chain = .a
+    @State private var loginItem = LoginItem()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -45,6 +46,7 @@ struct PopoverView: View {
         .onAppear {
             engine.isPopoverVisible = true
             engine.refreshEnvironment()
+            loginItem.refresh()
         }
         .onDisappear { engine.isPopoverVisible = false }
     }
@@ -170,6 +172,32 @@ struct PopoverView: View {
             GridRow {
                 Text("Latency").gridLabel()
                 Text(latencyText).gridValue()
+            }
+            GridRow {
+                Text("At login").gridLabel()
+                HStack(spacing: 6) {
+                    Toggle("Launch automatically", isOn: Binding(
+                        get: { loginItem.isEnabled },
+                        set: { loginItem.setEnabled($0) }))
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
+                    if loginItem.needsApproval {
+                        Button("Approve…") { loginItem.openLoginItemsSettings() }
+                            .controlSize(.small)
+                            .help("macOS is holding this pending your approval in Login Items")
+                    }
+                }
+                .help("With BlackHole as the system output, nothing drains it while "
+                      + "Contour is not running — so there is no sound at all.")
+            }
+            if let failure = loginItem.failure {
+                GridRow {
+                    Text("").gridLabel()
+                    Text(failure)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
