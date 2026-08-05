@@ -66,13 +66,15 @@ struct PresetBar: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Text(loaded?.name ?? "No preset")
                         .foregroundStyle(loaded == nil ? .secondary : .primary)
+                    // Conventional "modified" marker. Silently discarding an
+                    // hour of tweaking on a preset switch is what makes a tool
+                    // untrustworthy, so the state has to be visible.
                     if isDirty {
-                        Circle()
-                            .fill(.orange)
-                            .frame(width: 5, height: 5)
+                        Text("*")
+                            .foregroundStyle(.orange)
                             .help("Unsaved changes")
                     }
                 }
