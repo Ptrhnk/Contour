@@ -13,10 +13,10 @@ struct Knob: View {
     let range: ClosedRange<Double>
     var logarithmic = false
     var defaultValue: Double?
+    var diameter: CGFloat = 34
 
     /// Points of vertical travel for the full range.
     private let travel: Double = 130
-    private let diameter: CGFloat = 34
     /// Gap at the bottom of the dial, so the ends of the range are distinguishable.
     private let sweep = Angle.degrees(270)
 
@@ -35,7 +35,7 @@ struct Knob: View {
                     if let defaultValue { value = clamp(defaultValue) }
                 })
             Text(title)
-                .font(.system(size: 9))
+                .font(.system(size: max(9, diameter * 0.26)))
                 .foregroundStyle(.secondary)
         }
         .help("\(title): drag to adjust, ⇧-drag for fine"

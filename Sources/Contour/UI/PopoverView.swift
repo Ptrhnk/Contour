@@ -2,8 +2,9 @@ import SwiftUI
 
 struct PopoverView: View {
     @Bindable var engine: AudioEngine
+    @Environment(\.openWindow) private var openWindow
     @State private var editingChain: Chain = .a
-    @State private var loginItem = LoginItem()
+    @State private var launchAgent = LaunchAgent()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -46,7 +47,7 @@ struct PopoverView: View {
         .onAppear {
             engine.isPopoverVisible = true
             engine.refreshEnvironment()
-            loginItem.refresh()
+            launchAgent.refresh()
         }
         .onDisappear { engine.isPopoverVisible = false }
     }
@@ -72,6 +73,13 @@ struct PopoverView: View {
             Circle().fill(statusColor).frame(width: 8, height: 8)
             Text("Contour").font(.headline)
             Spacer()
+            Button {
+                openWindow(id: EQWindowView.id)
+            } label: {
+                Image(systemName: "macwindow")
+            }
+            .buttonStyle(.plain)
+            .help("Open the large EQ editor")
             Text(statusText).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -176,21 +184,24 @@ struct PopoverView: View {
             GridRow {
                 Text("At login").gridLabel()
                 HStack(spacing: 6) {
-                    Toggle("Launch automatically", isOn: Binding(
-                        get: { loginItem.isEnabled },
-                        set: { loginItem.setEnabled($0) }))
+                    Toggle("Launch at login, restart on crash", isOn: Binding(
+                        get: { launchAgent.isEnabled },
+                        set: { launchAgent.setEnabled($0) }))
                         .toggleStyle(.checkbox)
                         .font(.caption)
-                    if loginItem.needsApproval {
-                        Button("Approve…") { loginItem.openLoginItemsSettings() }
+                    if launchAgent.needsApproval {
+                        Button("Approve…") { launchAgent.openLoginItemsSettings() }
                             .controlSize(.small)
                             .help("macOS is holding this pending your approval in Login Items")
                     }
                 }
                 .help("With BlackHole as the system output, nothing drains it while "
-                      + "Contour is not running — so there is no sound at all.")
+                      + "Contour is not running — so there is no sound at all. "
+                      + "launchd also restarts Contour if it exits abnormally, which "
+                      + "is what a crashing plugin looks like. Quitting from the menu "
+                      + "stays quit.")
             }
-            if let failure = loginItem.failure {
+            if let failure = launchAgent.failure {
                 GridRow {
                     Text("").gridLabel()
                     Text(failure)

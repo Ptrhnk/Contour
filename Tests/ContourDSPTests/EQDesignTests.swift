@@ -239,3 +239,73 @@ struct EQDesignTests {
         #expect(EQDesign.effectiveQ(for: band, adaptiveQ: true) == 2)
     }
 }
+
+@Suite("Shelf Q range")
+struct ShelfQRangeTests {
+
+    /// The reason the control stops where it does: inside this range a shelf is
+    /// monotonic, so a "+6 dB" shelf delivers at most +6 dB and never dips below
+    /// unity on the other side of the corner.
+    @Test("Shelves never overshoot within the editable Q range")
+    func shelvesDoNotOvershoot() {
+        for type in [EQBandType.lowShelf, .highShelf] {
+            let range = type.editableQRange
+            for gain in [-15.0, -6, 6, 15] {
+                for q in [range.lowerBound, 0.3, 0.5, range.upperBound] {
+                    for frequency in [100.0, 1_000, 6_000] {
+                        let band = EQBand(id: 0, type: type, frequency: frequency,
+                                          gainDB: gain, q: q, isEnabled: true)
+                        let c = EQDesign.coefficients(for: band, sampleRate: sampleRate)
+                        var high = -99.0, low = 99.0
+                        for hz in stride(from: 20.0, through: 20_000, by: 20) {
+                            let db = c.magnitudeDB(atNormalizedFrequency: hz / sampleRate)
+                            high = Swift.max(high, db)
+                            low = Swift.min(low, db)
+                        }
+                        let note = "\(type) g=\(gain) q=\(q) f=\(frequency)"
+                        if gain > 0 {
+                            #expect(high <= gain + 0.15, "\(note): overshoot to \(high)")
+                            #expect(low >= -0.15, "\(note): dipped to \(low)")
+                        } else {
+                            #expect(low >= gain - 0.15, "\(note): undershoot to \(low)")
+                            #expect(high <= 0.15, "\(note): peaked to \(high)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Above the limit the resonance is real, which is why the control excludes
+    /// it rather than the design forbidding it.
+    @Test("Shelves above the editable range do resonate")
+    func shelvesAboveRangeResonate() {
+        let band = EQBand(id: 0, type: .highShelf, frequency: 8_000,
+                          gainDB: 6, q: 8, isEnabled: true)
+        let c = EQDesign.coefficients(for: band, sampleRate: sampleRate)
+        var high = -99.0, low = 99.0
+        for hz in stride(from: 20.0, through: 20_000, by: 20) {
+            let db = c.magnitudeDB(atNormalizedFrequency: hz / sampleRate)
+            high = Swift.max(high, db)
+            low = Swift.min(low, db)
+        }
+        #expect(high > 8, "expected overshoot well past +6 dB, got \(high)")
+        #expect(low < -5, "expected a matching dip, got \(low)")
+    }
+
+    /// Imports must survive. A curve carrying a resonant shelf keeps its value.
+    @Test("An imported resonant shelf keeps its Q")
+    func importedShelfKeepsItsQ() {
+        let band = EQBand(id: 0, type: .lowShelf, frequency: 120,
+                          gainDB: 4, q: 3, isEnabled: true)
+        #expect(band.editableQRange.upperBound >= 3)
+        #expect(band.clamped.q == 3)
+    }
+
+    @Test("Bells and cuts keep the full Q range")
+    func bellsKeepFullRange() {
+        for type in [EQBandType.bell, .lowCut, .highCut, .notch] {
+            #expect(type.editableQRange == EQBand.qRange)
+        }
+    }
+}

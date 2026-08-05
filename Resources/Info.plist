@@ -26,5 +26,12 @@
 	<string>Contour reads system audio back from BlackHole, which macOS treats as an audio input device. No microphone is recorded.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Contour renders audio continuously and is the only thing draining
+	     BlackHole. Adding a Window scene made AppKit treat it as a windowed app
+	     and terminate it as idle whenever no window was open. -->
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
 </dict>
 </plist>

@@ -78,7 +78,8 @@ struct EQCurveView: View {
     /// Band Q and gain at drag start, so ⌥-drag is relative rather than absolute.
     @State private var dragAnchor: (q: Double, gain: Double, y: CGFloat)?
 
-    private let height: CGFloat = 150
+    /// Handles scale with the view so the large window is easier to hit.
+    var handleRadius: CGFloat = 7.5
 
     var body: some View {
         GeometryReader { proxy in
@@ -97,7 +98,6 @@ struct EQCurveView: View {
                     }
                 })
         }
-        .frame(height: height)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
         .onAppear { model.rebuild(settings, sampleRate: sampleRate) }
         .onChange(of: settings) { model.rebuild(settings, sampleRate: sampleRate) }
@@ -159,7 +159,7 @@ struct EQCurveView: View {
         for (index, band) in settings.bands.enumerated() {
             let center = position(of: band, geometry: geometry)
             let isSelected = index == selectedBand
-            let radius: CGFloat = isSelected ? 9 : 7.5
+            let radius = isSelected ? handleRadius * 1.2 : handleRadius
             let circle = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
                                                 width: radius * 2, height: radius * 2))
             context.fill(circle,
@@ -170,7 +170,7 @@ struct EQCurveView: View {
                 context.stroke(circle, with: .color(.primary.opacity(0.8)), lineWidth: 1.5)
             }
             context.draw(Text("\(index + 1)")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: handleRadius * 1.2, weight: .bold))
                             .foregroundStyle(band.isEnabled ? Color.white : Color.secondary),
                          at: center)
         }
@@ -190,7 +190,7 @@ struct EQCurveView: View {
             let distance = hypot(center.x - location.x, center.y - location.y)
             if best == nil || distance < best!.distance { best = (index, distance) }
         }
-        guard let best, best.distance < 26 else { return nil }
+        guard let best, best.distance < handleRadius * 3.5 else { return nil }
         return best.index
     }
 

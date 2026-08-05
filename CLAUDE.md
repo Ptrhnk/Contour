@@ -51,6 +51,8 @@ Makefile. This is not a workaround to be replaced with an Xcode project.
 | Inactive chains are torn down, not bypassed | Plugins deallocated, RAM returned. |
 | Presets are a **single shared library**, not per chain | Departs from the spec. A pair of headphones arrives on chain B through the interface's 3/4 pair, or on chain A as a stereo-only Bluetooth device. Per-chain lists would hide a headphone curve from half the ways you can plug those headphones in. |
 | Plugins referenced by *any preset of an active chain* stay instantiated but bypassed | Makes preset switching the click-free fast path. `Unload unused plugins` action exists for when RAM matters more. |
+| Shelf Q is limited to 1/√2 in the UI, not in the design | Above it an RBJ shelf resonates: a "+6 dB" shelf at Q=18 swings +25/−19 dB. Correct filter behaviour, almost never wanted. Imports keep any Q they carry. |
+| Launch at login and crash restart are one bundled LaunchAgent | `KeepAlive { SuccessfulExit = false }` gives both. Quitting from the menu stays quit. |
 | No installer, notarization, DMG, auto-update, App Store | Repo is the distribution channel. |
 | BlackHole stays unbundled | Link the official installer from the README. Also avoids interacting with its GPL-3.0. MIT for this repo. |
 
@@ -198,6 +200,42 @@ biquads either.
 
 Runs on every start, which includes device changes and sample-rate rebuilds —
 exactly when the burst was audible.
+
+### AppKit will terminate this app if you let it
+
+Adding a `Window` scene made AppKit treat Contour as a windowed app, so with no
+window open macOS terminated it as idle — logged only as
+`_kLSApplicationWouldBeTerminatedByTALKey=1`, no crash report, nothing in our
+own log. For this app that means **all audio stops**, since nothing else drains
+BlackHole.
+
+Held off by `NSSupportsAutomaticTermination=false` and
+`NSSupportsSuddenTermination=false` in `Info.plist`,
+`applicationShouldTerminateAfterLastWindowClosed → false`, and
+`disableAutomaticTermination` at launch. Do not remove any of them.
+
+### Shelf Q, and why the control stops at 1/√2
+
+Measured, high shelf at 8 kHz asking for **+6 dB**:
+
+```
+   Q  | sweep max  sweep min
+ 0.71 |      6.0        0.0     ← monotonic
+ 1.00 |      6.4       -0.4
+ 2.00 |      8.9       -2.9
+18.00 |     25.1      -19.1
+```
+
+`alpha = sin(ω₀)/(2Q)` is the RBJ cookbook shelf, and Q = 1/√2 is exactly where
+his slope parameter S = 1 — steepest without overshoot. Ableton feels gentler
+because EQ Eight reparameterises shelves by slope and never exposes this region.
+
+`EQBandType.editableQRange` narrows the *control* for shelves only.
+`EQBand.editableQRange` widens it again when a band already carries a higher Q,
+so an AutoEq or Equalizer APO curve keeps its exact value. The design itself
+still accepts the full range — AutoEq targets Equalizer APO, whose `LSC`/`HSC`
+are these same RBJ shelves with this same Q convention, so changing the
+parameterisation would silently mistranslate every imported curve.
 
 ### Swift traps that produced audible bugs
 

@@ -24,10 +24,13 @@ struct EQSection: View {
         VStack(alignment: .leading, spacing: 8) {
             header
 
+            // The curve has no intrinsic height any more, so the popover sets
+            // one; the large window lets it fill instead.
             EQCurveView(settings: $settings.eq,
                         selectedBand: $selectedBand,
                         model: model,
                         sampleRate: sampleRate)
+                .frame(height: 150)
                 .opacity(settings.eq.isEnabled ? 1 : 0.4)
 
             bandEditor
@@ -118,7 +121,7 @@ struct EQSection: View {
 
                 knobColumn(title: "Q",
                            value: band.q,
-                           range: EQBand.qRange,
+                           range: band.wrappedValue.editableQRange,
                            logarithmic: true,
                            defaultValue: 0.7,
                            fieldWidth: 46)

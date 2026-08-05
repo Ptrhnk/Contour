@@ -30,6 +30,23 @@ public enum EQBandType: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Q the UI will let you dial in, which is narrower than what the design
+    /// accepts.
+    ///
+    /// An RBJ shelf becomes resonant above Q = 1/√2: it overshoots the
+    /// requested gain and dips by a matching amount on the far side of the
+    /// corner. A "+6 dB" shelf at Q = 18 actually swings +25 to −19 dB. That is
+    /// correct behaviour for the filter, and almost never what anyone wants, so
+    /// the control stops at the point where the shelf is steepest without
+    /// overshooting. Bells and cuts keep the full range, where high Q is the
+    /// entire point.
+    public var editableQRange: ClosedRange<Double> {
+        switch self {
+        case .lowShelf, .highShelf: 0.1...(1 / 2.0.squareRoot())
+        case .bell, .lowCut, .highCut, .notch: EQBand.qRange
+        }
+    }
+
     /// Cuts and notches have no gain parameter.
     public var usesGain: Bool {
         switch self {
@@ -66,6 +83,16 @@ public struct EQBand: Codable, Equatable, Sendable, Identifiable {
         self.gainDB = gainDB
         self.q = q
         self.isEnabled = isEnabled
+    }
+
+    /// The range the controls offer for *this* band.
+    ///
+    /// Widened when the band already carries a higher Q, so importing an AutoEq
+    /// or Equalizer APO curve with a resonant shelf keeps its exact value
+    /// instead of being silently pulled down the moment the control is touched.
+    public var editableQRange: ClosedRange<Double> {
+        let base = type.editableQRange
+        return base.lowerBound...Swift.max(base.upperBound, q)
     }
 
     public var clamped: EQBand {
