@@ -479,7 +479,12 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: steps 1–3 done, step 4 (menu bar UI) partly done, step 5 not started.**
+**Current state: v0.6.0 — build-order steps 1–4 and 6 done. Step 5 (AU
+hosting) and step 7 (tap backend) not started.**
+
+Version lives in `Resources/Info.plist` as `CFBundleShortVersionString` and is
+shown beside the name in the popover. Tagged releases mark states worth
+returning to; `v0.6.0` is the EQ-only app, complete and in daily use.
 
 Working: private aggregate build/teardown, verified channel mapping, one IOProc
 doing dry passthrough into both output pairs, microphone TCC handling,

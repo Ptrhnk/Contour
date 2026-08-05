@@ -72,6 +72,10 @@ struct PopoverView: View {
         HStack(spacing: 8) {
             Circle().fill(statusColor).frame(width: 8, height: 8)
             Text("Contour").font(.headline)
+            Text(Bundle.main.shortVersion)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .help("Contour \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber))")
             Spacer()
             Button {
                 openWindow(id: EQWindowView.id)
@@ -312,6 +316,16 @@ private struct ChainSection: View {
 }
 
 // MARK: - Bits
+
+extension Bundle {
+    var shortVersion: String {
+        object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
+
+    var buildNumber: String {
+        object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+    }
+}
 
 enum Format {
     static func db(_ value: Float) -> String {
