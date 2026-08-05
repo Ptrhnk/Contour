@@ -102,9 +102,12 @@ final class AudioEngine {
         }
     }
 
+    let history = EditHistory()
+
     var chainA = ChainSettings() {
         didSet {
             guard !isLoading, chainA != oldValue else { return }
+            history.record(chain: .a, before: oldValue, after: chainA)
             save(chainA, forKey: Keys.chainA)
             publishParameters()
             if chainA.eq != oldValue.eq { eqA.update(settings: chainA.eq, sampleRate: eqSampleRate) }
@@ -114,6 +117,7 @@ final class AudioEngine {
     var chainB = ChainSettings() {
         didSet {
             guard !isLoading, chainB != oldValue else { return }
+            history.record(chain: .b, before: oldValue, after: chainB)
             save(chainB, forKey: Keys.chainB)
             publishParameters()
             if chainB.eq != oldValue.eq { eqB.update(settings: chainB.eq, sampleRate: eqSampleRate) }
@@ -436,6 +440,21 @@ final class AudioEngine {
         guard let capture else { return }
         try? AudioDevices.setOutputVolumeScalar(capture, 1.0)
         refreshEnvironment()
+    }
+
+    // MARK: - Undo
+
+    var canUndo: Bool { history.canUndo }
+    var canRedo: Bool { history.canRedo }
+
+    func undo() {
+        guard let step = history.undo() else { return }
+        history.withApplying { setSettings(step.settings, for: step.chain) }
+    }
+
+    func redo() {
+        guard let step = history.redo() else { return }
+        history.withApplying { setSettings(step.settings, for: step.chain) }
     }
 
     // MARK: - Presets
