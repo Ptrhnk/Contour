@@ -75,8 +75,11 @@ struct EQCurveView: View {
     var sampleRate: Double
 
     @State private var draggingBand: Int?
-    /// Band Q and gain at drag start, so ⌥-drag is relative rather than absolute.
-    @State private var dragAnchor: (q: Double, gain: Double, y: CGFloat)?
+    /// The band's values and the cursor position when the drag began. Everything
+    /// moves by an offset from these, so grabbing a handle off-centre does not
+    /// snap it under the cursor.
+    @State private var dragAnchor: (frequency: Double, gain: Double, q: Double,
+                                    start: CGPoint)?
 
     /// Handles scale with the view so the large window is easier to hit.
     var handleRadius: CGFloat = 7.5
@@ -88,7 +91,15 @@ struct EQCurveView: View {
                 draw(&context, geometry: EQGeometry(size: size))
             }
             .contentShape(Rectangle())
+            // A plain click only selects. Movement needs a deliberate drag, so
+            // clicking a handle to inspect it cannot nudge the curve.
             .gesture(dragGesture(geometry))
+            .simultaneousGesture(
+                SpatialTapGesture(count: 1).onEnded { value in
+                    if let band = nearestBand(to: value.location, geometry: geometry) {
+                        selectedBand = band
+                    }
+                })
             .simultaneousGesture(
                 SpatialTapGesture(count: 2).onEnded { value in
                     if let band = nearestBand(to: value.location, geometry: geometry) {
@@ -195,7 +206,8 @@ struct EQCurveView: View {
     }
 
     private func dragGesture(_ geometry: EQGeometry) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        // A few points of slop: below this it is a click, not a drag.
+        DragGesture(minimumDistance: 4)
             .onChanged { value in
                 let modifiers = NSEvent.modifierFlags
                 if draggingBand == nil {
@@ -205,36 +217,34 @@ struct EQCurveView: View {
                         ?? selectedBand
                     draggingBand = band
                     selectedBand = band
-                    dragAnchor = (settings.bands[band].q,
-                                  settings.bands[band].gainDB,
-                                  value.startLocation.y)
+                    let current = settings.bands[band]
+                    dragAnchor = (current.frequency, current.gainDB, current.q,
+                                  value.startLocation)
                 }
-                guard let index = draggingBand, index < settings.bands.count else { return }
+                guard let index = draggingBand, let anchor = dragAnchor,
+                      index < settings.bands.count else { return }
 
-                if modifiers.contains(.option), let anchor = dragAnchor {
+                let fine = modifiers.contains(.shift) ? 0.25 : 1.0
+
+                if modifiers.contains(.option) {
                     // ⌥-drag adjusts Q. Vertical distance is exponential so the
-                    // whole 0.1–18 range is reachable without a huge throw.
-                    let delta = Double(anchor.y - value.location.y) / 40
-                    settings.bands[index].q = min(max(anchor.q * pow(2, delta),
-                                                      EQBand.qRange.lowerBound),
-                                                  EQBand.qRange.upperBound)
+                    // whole range is reachable without a huge throw.
+                    let delta = Double(anchor.start.y - value.location.y) / 40 * fine
+                    let range = settings.bands[index].editableQRange
+                    settings.bands[index].q =
+                        min(max(anchor.q * pow(2, delta), range.lowerBound), range.upperBound)
                 } else {
-                    let fine = modifiers.contains(.shift)
-                    let frequency = geometry.frequency(x: value.location.x)
-                    if fine, let anchor = dragAnchor {
-                        let current = settings.bands[index].frequency
-                        settings.bands[index].frequency =
-                            clampFrequency(current + (frequency - current) * 0.2)
-                        if settings.bands[index].type.usesGain {
-                            let target = geometry.db(y: value.location.y)
-                            settings.bands[index].gainDB =
-                                clampGain(anchor.gain + (target - anchor.gain) * 0.2)
-                        }
-                    } else {
-                        settings.bands[index].frequency = clampFrequency(frequency)
-                        if settings.bands[index].type.usesGain {
-                            settings.bands[index].gainDB = clampGain(geometry.db(y: value.location.y))
-                        }
+                    // Offset from where the drag began, not the cursor position,
+                    // so the handle keeps its grab point.
+                    let dx = (value.location.x - anchor.start.x) * fine
+                    let anchorX = geometry.x(frequency: anchor.frequency)
+                    settings.bands[index].frequency =
+                        clampFrequency(geometry.frequency(x: anchorX + dx))
+
+                    if settings.bands[index].type.usesGain {
+                        let dy = (value.location.y - anchor.start.y) * fine
+                        let anchorY = geometry.y(db: anchor.gain)
+                        settings.bands[index].gainDB = clampGain(geometry.db(y: anchorY + dy))
                     }
                 }
                 model.update(bandAt: index, settings: settings)
