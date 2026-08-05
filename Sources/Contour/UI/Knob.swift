@@ -23,21 +23,17 @@ struct Knob: View {
     @State private var anchor: Double?
 
     var body: some View {
-        VStack(spacing: 2) {
-            Canvas(rendersAsynchronously: false) { context, size in
-                draw(&context, size: size)
-            }
-            .frame(width: diameter, height: diameter)
-            .contentShape(Circle())
-            .gesture(drag)
-            .simultaneousGesture(
-                TapGesture(count: 2).onEnded {
-                    if let defaultValue { value = clamp(defaultValue) }
-                })
-            Text(title)
-                .font(.system(size: max(9, diameter * 0.26)))
-                .foregroundStyle(.secondary)
+        Canvas(rendersAsynchronously: false) { context, size in
+            draw(&context, size: size)
         }
+        .frame(width: diameter, height: diameter)
+        .contentShape(Circle())
+        .gesture(drag)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                if let defaultValue { value = clamp(defaultValue) }
+            })
+        .accessibilityLabel(title)
         .help("\(title): drag to adjust, ⇧-drag for fine"
               + (defaultValue != nil ? ", double-click to reset" : ""))
     }

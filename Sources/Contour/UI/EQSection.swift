@@ -66,7 +66,9 @@ struct EQSection: View {
     // MARK: - Band editor
 
     private var bandEditor: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 10) {
+            // Spread across the full width so the selectors line up with the
+            // curve above them.
             HStack(spacing: 4) {
                 ForEach(Array(settings.eq.bands.enumerated()), id: \.element.id) { index, item in
                     Button {
@@ -74,7 +76,8 @@ struct EQSection: View {
                     } label: {
                         Text("\(index + 1)")
                             .font(.caption.monospacedDigit())
-                            .frame(width: 20, height: 18)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 20)
                             .background(index == selectedBand
                                         ? Color.accentColor.opacity(0.25)
                                         : Color.primary.opacity(0.06),
@@ -84,15 +87,15 @@ struct EQSection: View {
                     .buttonStyle(.plain)
                     .help(item.isEnabled ? item.type.title : "\(item.type.title) (off)")
                 }
-                Spacer()
-                Toggle("On", isOn: band.isEnabled)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
             }
 
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Type").font(.system(size: 9)).foregroundStyle(.secondary)
+            // Equal-width side columns so the knobs land optically centred
+            // rather than merely "after" the type picker.
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Band \(selectedBand + 1)")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
                     Picker("", selection: band.type) {
                         ForEach(EQBandType.allCases, id: \.self) { type in
                             Text(type.title).tag(type)
@@ -100,31 +103,45 @@ struct EQSection: View {
                     }
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(width: 108)
+                }
+                .frame(width: 96, alignment: .leading)
+
+                Spacer(minLength: 0)
+
+                // Knobs and the On toggle form one group, centred in the space
+                // left of the type column. Giving On its own fixed column made
+                // its unused width show up as a gutter on the right edge.
+                HStack(alignment: .top, spacing: 12) {
+                    knobColumn(title: "Freq",
+                               value: band.frequency,
+                               range: EQBand.frequencyRange,
+                               logarithmic: true,
+                               defaultValue: nil,
+                               fieldWidth: 60)
+
+                    knobColumn(title: "Gain",
+                               value: band.gainDB,
+                               range: EQBand.gainRange,
+                               logarithmic: false,
+                               defaultValue: 0,
+                               fieldWidth: 52)
+                        .disabled(!band.wrappedValue.type.usesGain)
+                        .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
+
+                    knobColumn(title: "Q",
+                               value: band.q,
+                               range: band.wrappedValue.editableQRange,
+                               logarithmic: true,
+                               defaultValue: 0.7,
+                               fieldWidth: 48)
+
+                    Toggle("On", isOn: band.isEnabled)
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
+                        .padding(.top, 12)
                 }
 
-                knobColumn(title: "Freq",
-                           value: band.frequency,
-                           range: EQBand.frequencyRange,
-                           logarithmic: true,
-                           defaultValue: nil,
-                           fieldWidth: 62)
-
-                knobColumn(title: "Gain",
-                           value: band.gainDB,
-                           range: EQBand.gainRange,
-                           logarithmic: false,
-                           defaultValue: 0,
-                           fieldWidth: 52)
-                    .disabled(!band.wrappedValue.type.usesGain)
-                    .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
-
-                knobColumn(title: "Q",
-                           value: band.q,
-                           range: band.wrappedValue.editableQRange,
-                           logarithmic: true,
-                           defaultValue: 0.7,
-                           fieldWidth: 46)
+                Spacer(minLength: 0)
             }
         }
     }
@@ -143,8 +160,15 @@ struct EQSection: View {
                  range: range,
                  logarithmic: logarithmic,
                  defaultValue: defaultValue)
+            Text(title)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
             numberFieldOnly(value: value, range: range, width: fieldWidth)
         }
+        // Fixed width: without it the columns size to their contents and the
+        // narrowest one loses its label to compression, taking its vertical
+        // alignment with it.
+        .frame(width: fieldWidth)
     }
 
     private func numberFieldOnly(value: Binding<Double>,

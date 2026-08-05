@@ -111,6 +111,24 @@ struct EQWindowView: View {
 
             Spacer()
 
+            Button {
+                engine.undo()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .disabled(!engine.canUndo)
+            .keyboardShortcut("z", modifiers: .command)
+            .help("Undo")
+
+            Button {
+                engine.redo()
+            } label: {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .disabled(!engine.canRedo)
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .help("Redo")
+
             Toggle(isOn: $isFloating) {
                 Image(systemName: isFloating ? "pin.fill" : "pin.slash")
             }
@@ -123,47 +141,63 @@ struct EQWindowView: View {
     // MARK: - Band strip
 
     private var bandStrip: some View {
-        HStack(alignment: .center, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) {
-                    ForEach(Array(settings.wrappedValue.eq.bands.enumerated()),
-                            id: \.element.id) { index, item in
-                        Button {
-                            selectedBand = index
-                        } label: {
-                            Text("\(index + 1)")
-                                .font(.callout.monospacedDigit())
-                                .frame(width: 26, height: 24)
-                                .background(index == selectedBand
-                                            ? Color.accentColor.opacity(0.25)
-                                            : Color.primary.opacity(0.06),
-                                            in: RoundedRectangle(cornerRadius: 5))
-                                .foregroundStyle(item.isEnabled ? .primary : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(item.isEnabled ? item.type.title : "\(item.type.title) (off)")
+        VStack(spacing: 12) {
+            // Numbered selectors spread across the full width, matching the
+            // curve above them.
+            HStack(spacing: 6) {
+                ForEach(Array(settings.wrappedValue.eq.bands.enumerated()),
+                        id: \.element.id) { index, item in
+                    Button {
+                        selectedBand = index
+                    } label: {
+                        Text("\(index + 1)")
+                            .font(.callout.monospacedDigit())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 24)
+                            .background(index == selectedBand
+                                        ? Color.accentColor.opacity(0.25)
+                                        : Color.primary.opacity(0.06),
+                                        in: RoundedRectangle(cornerRadius: 5))
+                            .foregroundStyle(item.isEnabled ? .primary : .secondary)
                     }
+                    .buttonStyle(.plain)
+                    .help(item.isEnabled ? item.type.title : "\(item.type.title) (off)")
                 }
-                HStack(spacing: 8) {
+            }
+
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Type").font(.system(size: 10)).foregroundStyle(.secondary)
                     Picker("", selection: band.type) {
                         ForEach(EQBandType.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .frame(width: 130)
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(alignment: .top, spacing: 22) {
+                    knob("Freq", band.frequency, EQBand.frequencyRange, logarithmic: true,
+                         defaultValue: nil, width: 78)
+                    knob("Gain", band.gainDB, EQBand.gainRange, logarithmic: false,
+                         defaultValue: 0, width: 66)
+                        .disabled(!band.wrappedValue.type.usesGain)
+                        .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
+                    knob("Q", band.q, band.wrappedValue.editableQRange, logarithmic: true,
+                         defaultValue: 0.7, width: 60)
+                }
+
+                Spacer(minLength: 0)
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("Band \(selectedBand + 1)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                     Toggle("On", isOn: band.isEnabled).toggleStyle(.checkbox)
                 }
+                .frame(width: 130, alignment: .trailing)
             }
-
-            knob("Freq", band.frequency, EQBand.frequencyRange, logarithmic: true,
-                 defaultValue: nil, width: 78)
-            knob("Gain", band.gainDB, EQBand.gainRange, logarithmic: false,
-                 defaultValue: 0, width: 66)
-                .disabled(!band.wrappedValue.type.usesGain)
-                .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
-            knob("Q", band.q, band.wrappedValue.editableQRange, logarithmic: true,
-                 defaultValue: 0.7, width: 60)
-
-            Spacer()
         }
     }
 
@@ -180,6 +214,9 @@ struct EQWindowView: View {
                  logarithmic: logarithmic,
                  defaultValue: defaultValue,
                  diameter: 52)
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             TextField("", value: Binding(get: { value.wrappedValue },
                                          set: { value.wrappedValue =
                                              min(max($0, range.lowerBound), range.upperBound) }),
@@ -189,6 +226,7 @@ struct EQWindowView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: width)
         }
+        .frame(width: width)
     }
 
     // MARK: - Levels
