@@ -1,0 +1,6 @@
+.build/
+build/
+.DS_Store
+
+# Machine-local Claude Code permissions, not project configuration.
+.claude/settings.local.json
