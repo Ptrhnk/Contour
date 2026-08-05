@@ -179,6 +179,25 @@ tick, re-evaluating the EQ `Canvas`, the pickers and three
 `TextField(value:format:)` number formatters. Meters therefore live in their own
 leaf views (`MeterRows.swift`) — keep them there.
 
+Meter polling runs at 50 ms while a UI is watching and 500 ms otherwise, decided
+by `AudioEngine.meterViewCount`. That is a *count*, not a flag, because both the
+popover and the EQ window show meters and either alone must raise the rate — a
+single `isPopoverVisible` flag left the window's meters stepping along at two
+updates per second whenever the popover was closed.
+
+### Naming a chain after its device
+
+With two output pairs, "Speakers" and "Headphones" are roles the user assigned to
+outputs 1/2 and 3/4; Contour cannot see what is plugged into either, so it does
+not guess. With a single stereo device the chain *is* that device, and it is
+named accordingly — calling a pair of AirPods "Speakers" is simply wrong.
+
+Classification comes from `kAudioStreamPropertyTerminalType`, which is a real
+device property rather than a string match: AirPods report `'hdph'`, while USB
+devices report the USB audio class numbers (0x0301 speaker, 0x0302 headphones).
+Name matching survives only as a fallback for devices reporting `0`, and to pick
+a model-specific icon, which terminal type cannot tell you.
+
 ### Testing
 
 There is no Xcode on this machine, only Command Line Tools, so **XCTest is not
@@ -200,6 +219,47 @@ biquads either.
 
 Runs on every start, which includes device changes and sample-rate rebuilds —
 exactly when the burst was audible.
+
+### The watchdog: why it is not `SMAppService`
+
+Launch at login and crash restart are one launchd user agent written to
+`~/Library/LaunchAgents` by `LaunchAgent.swift`. Three findings, each measured,
+each of which broke an earlier attempt:
+
+**`SMAppService` cannot work for a self-signed build.** launchd derives a
+lightweight code requirement for a bundled agent and fails:
+
+```
+Service could not initialize: Unable to get updated LWCR for (…),
+error 0x16 - Invalid argument
+job state = spawn failed, last exit reason = OS_REASON_CODESIGNING
+```
+
+It retries every ten seconds forever. That machinery wants a trusted signature;
+this project commits to a self-signed certificate with no Developer Program
+(§8a). A plain agent predates LWCR and works — restart after `kill -9` measured
+at about three seconds. Do not "modernise" this to `SMAppService`.
+
+**A launchd label is single-use per login session.** Bootstrap a label, boot it
+out, and it can never be bootstrapped again until logout: the command *reports
+success* and the job silently never loads. `launchctl print` says the service
+does not exist while Background Task Management still lists it as enabled.
+`launchctl enable`, `launchctl kickstart`, and deleting and rewriting the plist
+all fail to recover it.
+
+So labels are **generational** — `com.nahak.contour.watchdog.N`. Each install
+claims a fresh one and retires the previous. The happy path (job still loaded,
+executable path unchanged) does nothing at all, because reinstalling means
+booting out first, which is the one action that destroys the label.
+
+**launchd bypasses LaunchServices.** It execs the binary directly, so opening
+the app from Finder while the watchdog's copy runs starts a *second* instance —
+two engines building two aggregate devices over the same hardware.
+`applicationWillFinishLaunching` exits duplicates with status 0, so `KeepAlive`
+treats it as a clean exit rather than a crash to recover from.
+
+While the watchdog is enabled, `killall Contour` looks like a crash and the app
+returns in ~3 s, which races `make run`. Turn it off while iterating.
 
 ### AppKit will terminate this app if you let it
 
@@ -435,13 +495,18 @@ persisted by default, and an absent `.debug` line looks identical to a dead
 callback.
 
 Also working: destination toggle (Speakers / Headphones / Both), per-chain
-output gain and input trim, 8-band parametric EQ per chain with draggable
-curve, per-chain tabs, stereo peak meters.
+output gain and input trim, 8-band parametric EQ per chain with draggable curve
+and Freq/Gain/Q knobs, presets (shared library, per-chain selection), peak-hold
+meters with a never-falling maximum, a large resizable EQ window, launch at
+login with crash restart, and device-aware chain naming.
 
-Not there yet: AU plugins, presets, tap backend, AutoEq text import, global
-hotkey, watchdog, scroll-wheel-for-Q.
+Not there yet: AU plugins, tap backend, AutoEq text import, global hotkey,
+scroll-wheel-for-Q, 31-band mode, spectrum analyser.
 
 Measured with the popover closed: **1.7% of one core**, ~80 MB RSS.
+
+Sleep/wake is wired but has never been exercised. Sample-rate change has been
+verified live.
 
 Source layout:
 
