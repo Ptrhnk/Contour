@@ -45,11 +45,11 @@ struct PopoverView: View {
         .padding(14)
         .frame(width: 420)
         .onAppear {
-            engine.isPopoverVisible = true
+            engine.beginObservingMeters()
             engine.refreshEnvironment()
             launchAgent.refresh()
         }
-        .onDisappear { engine.isPopoverVisible = false }
+        .onDisappear { engine.endObservingMeters() }
     }
 
     /// Chains the destination feeds. A stereo-only interface has one regardless.
@@ -265,10 +265,12 @@ private struct ChainSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: chain == .a ? "hifispeaker" : "headphones")
+                Image(systemName: engine.symbol(for: chain))
                     .foregroundStyle(isActive ? .primary : .secondary)
-                Text(chain.title).font(.callout.weight(.medium))
-                Text(chain.outputPairLabel).font(.caption).foregroundStyle(.secondary)
+                Text(engine.title(for: chain)).font(.callout.weight(.medium))
+                if engine.supportsTwoChains {
+                    Text(chain.outputPairLabel).font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 if !isActive { Text("off").font(.caption).foregroundStyle(.secondary) }
             }

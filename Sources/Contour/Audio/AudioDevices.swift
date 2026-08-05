@@ -1,6 +1,14 @@
 import CoreAudio
 import Foundation
 
+/// What the device physically is, so the UI can say "AirPods Pro" with the
+/// right icon rather than calling everything "Speakers".
+enum AudioDeviceKind: Sendable {
+    case headphones
+    case speakers
+    case unknown
+}
+
 struct AudioDevice: Identifiable, Hashable, Sendable {
     let id: AudioObjectID
     let uid: String
@@ -9,9 +17,60 @@ struct AudioDevice: Identifiable, Hashable, Sendable {
     let outputChannels: Int
     let sampleRate: Double
     let transportType: UInt32
+    /// From `kAudioStreamPropertyTerminalType` on the first output stream.
+    let outputTerminalType: UInt32
 
     var isVirtual: Bool { transportType == kAudioDeviceTransportTypeVirtual }
     var isAggregate: Bool { transportType == kAudioDeviceTransportTypeAggregate }
+    var isBluetooth: Bool {
+        transportType == kAudioDeviceTransportTypeBluetooth
+            || transportType == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    /// Core Audio reports this properly for the cases that matter — AirPods
+    /// answer `'hdph'` — so this is real detection rather than name matching.
+    /// USB devices report the USB audio class terminal numbers instead, where
+    /// 0x0301 is a speaker and 0x0302 headphones.
+    var kind: AudioDeviceKind {
+        switch outputTerminalType {
+        case kAudioStreamTerminalTypeHeadphones, 0x0302: return .headphones
+        case kAudioStreamTerminalTypeSpeaker,
+             kAudioStreamTerminalTypeReceiverSpeaker,
+             0x0301: return .speakers
+        default: break
+        }
+        // Fallback for devices that report nothing useful.
+        let lowercased = name.lowercased()
+        for hint in ["airpod", "headphone", "headset", "beats", "buds", "hd 6", "hd6"]
+        where lowercased.contains(hint) {
+            return .headphones
+        }
+        return .unknown
+    }
+
+    /// Drops the possessive prefix macOS puts on Bluetooth devices, so
+    /// "Langoš's AirPods Pro" reads as "AirPods Pro".
+    var shortName: String {
+        for separator in ["\u{2019}s ", "'s "] {
+            if let range = name.range(of: separator) {
+                return String(name[range.upperBound...])
+            }
+        }
+        return name
+    }
+
+    var symbolName: String {
+        let lowercased = name.lowercased()
+        if lowercased.contains("airpods max") { return "airpodsmax" }
+        if lowercased.contains("airpods pro") { return "airpods.pro" }
+        if lowercased.contains("airpods") { return "airpods" }
+        if lowercased.contains("beats") { return "beats.headphones" }
+        switch kind {
+        case .headphones: return "headphones"
+        case .speakers: return isBluetooth ? "hifispeaker.fill" : "hifispeaker"
+        case .unknown: return "speaker.wave.2"
+        }
+    }
 }
 
 enum AudioDevices {
@@ -41,7 +100,23 @@ enum AudioDevices {
             inputChannels: CA.channelCount(id, scope: kAudioObjectPropertyScopeInput),
             outputChannels: CA.channelCount(id, scope: kAudioObjectPropertyScopeOutput),
             sampleRate: sampleRate,
-            transportType: transport)
+            transportType: transport,
+            outputTerminalType: outputTerminalType(id))
+    }
+
+    private static func outputTerminalType(_ id: AudioObjectID) -> UInt32 {
+        let streams = (try? CA.array(id,
+                                     CA.address(kAudioDevicePropertyStreams,
+                                                scope: kAudioObjectPropertyScopeOutput),
+                                     of: AudioObjectID.self)) ?? []
+        for stream in streams {
+            if let type = try? CA.value(stream,
+                                        CA.address(kAudioStreamPropertyTerminalType),
+                                        default: UInt32(0)), type != 0 {
+                return type
+            }
+        }
+        return 0
     }
 
     static func device(uid: String) -> AudioDevice? {

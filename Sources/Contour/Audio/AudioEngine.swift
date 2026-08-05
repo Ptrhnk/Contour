@@ -138,8 +138,19 @@ final class AudioEngine {
         }
     }
 
-    /// The popover only exists while open, so meters are polled fast only then.
-    var isPopoverVisible = false
+    /// Number of visible views currently showing meters.
+    ///
+    /// A count rather than a flag because there are two surfaces now — the
+    /// popover and the EQ window — and either alone must be enough to raise the
+    /// poll rate. Gating on the popover meant the window's meters stepped along
+    /// at the 500 ms idle rate whenever the popover happened to be closed.
+    private(set) var meterViewCount = 0
+
+    var wantsFastMeters: Bool { meterViewCount > 0 }
+
+    func beginObservingMeters() { meterViewCount += 1 }
+
+    func endObservingMeters() { meterViewCount = max(0, meterViewCount - 1) }
 
     func settings(for chain: Chain) -> ChainSettings { chain == .a ? chainA : chainB }
 
@@ -225,6 +236,24 @@ final class AudioEngine {
     /// A stereo-only interface collapses to one chain with no loss of function,
     /// and the destination switch is hidden rather than shown broken.
     var supportsTwoChains: Bool { outputPairCount >= 2 }
+
+    /// What to call a chain in the UI.
+    ///
+    /// With two output pairs the names are roles the user assigned to physical
+    /// outputs, and Contour cannot see what is plugged into either — so they
+    /// stay "Speakers" and "Headphones". With a single stereo device the chain
+    /// *is* that device, and calling a pair of AirPods "Speakers" is just wrong.
+    func title(for chain: Chain) -> String {
+        guard !supportsTwoChains, let interface else { return chain.title }
+        return interface.shortName
+    }
+
+    func symbol(for chain: Chain) -> String {
+        guard !supportsTwoChains, let interface else {
+            return chain == .a ? "hifispeaker" : "headphones"
+        }
+        return interface.symbolName
+    }
 
     /// Single source of truth for "does this chain render".
     ///
@@ -539,7 +568,7 @@ final class AudioEngine {
             var lastCallbacks: UInt64 = 0
             var stalledPolls = 0
             while !Task.isCancelled {
-                let idle = !(self?.isPopoverVisible ?? false)
+                let idle = !(self?.wantsFastMeters ?? false)
                 try? await Task.sleep(for: .milliseconds(idle ? 500 : 50))
                 guard let self else { return }
                 guard let source = self.source else {

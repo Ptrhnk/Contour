@@ -65,6 +65,8 @@ struct EQWindowView: View {
         .padding(16)
         .frame(minWidth: 720, minHeight: 520)
         .background(WindowConfigurator(isFloating: isFloating).frame(width: 0, height: 0))
+        .onAppear { engine.beginObservingMeters() }
+        .onDisappear { engine.endObservingMeters() }
     }
 
     // MARK: - Toolbar
@@ -81,14 +83,16 @@ struct EQWindowView: View {
                 .labelsHidden()
                 .fixedSize()
             } else {
-                Label(shownChain.title,
-                      systemImage: shownChain == .a ? "hifispeaker" : "headphones")
+                Label(engine.title(for: shownChain),
+                      systemImage: engine.symbol(for: shownChain))
                     .font(.headline)
             }
 
-            Text(shownChain.outputPairLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if engine.supportsTwoChains {
+                Text(shownChain.outputPairLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Divider().frame(height: 16)
 
