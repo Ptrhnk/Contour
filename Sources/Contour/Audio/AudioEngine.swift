@@ -7,6 +7,11 @@ import Foundation
 import Observation
 import os
 
+enum MeterTarget: Equatable {
+    case input
+    case chain(Chain)
+}
+
 enum EngineStatus: Equatable {
     case stopped
     case running
@@ -18,15 +23,37 @@ enum EngineStatus: Equatable {
     var isRunning: Bool { self == .running }
 }
 
-/// Smoothed peak levels in dBFS for display. Falls at a fixed rate so the
-/// meters read rather than flicker.
+/// One channel of a meter, in dBFS.
+///
+/// Three values because they answer different questions: `level` is the bar and
+/// has to be readable while music plays, `hold` is the short-term peak so a
+/// transient is visible at all, and `maximum` never falls so "did a boost ever
+/// clip" is still answerable after you look away.
+struct ChannelMeter: Equatable {
+    var level = Decibels.silenceFloor
+    var hold = Decibels.silenceFloor
+    var holdRemaining: Double = 0
+    var maximum = Decibels.silenceFloor
+}
+
+struct StereoMeter: Equatable {
+    var left = ChannelMeter()
+    var right = ChannelMeter()
+
+    var maximum: Float { max(left.maximum, right.maximum) }
+    /// Full scale reached. With EQ boosts in the path this is worth flagging.
+    var didClip: Bool { maximum >= -0.1 }
+}
+
 struct DisplayLevels: Equatable {
-    var inputL = Decibels.silenceFloor
-    var inputR = Decibels.silenceFloor
-    var chainAL = Decibels.silenceFloor
-    var chainAR = Decibels.silenceFloor
-    var chainBL = Decibels.silenceFloor
-    var chainBR = Decibels.silenceFloor
+    var input = StereoMeter()
+    var chainA = StereoMeter()
+    var chainB = StereoMeter()
+
+    subscript(chain: Chain) -> StereoMeter {
+        get { chain == .a ? chainA : chainB }
+        set { if chain == .a { chainA = newValue } else { chainB = newValue } }
+    }
 }
 
 @MainActor
@@ -43,6 +70,16 @@ final class AudioEngine {
     /// Contour sees the audio, so anything below unity is throwing away bits.
     private(set) var systemOutput: AudioDevice?
     private(set) var captureVolume: Float?
+
+    /// Non-nil only when the render target exposes a software volume control.
+    ///
+    /// This is the whole discovery mechanism for "is this an external interface
+    /// or not": a class-compliant interface with a physical knob has no
+    /// `kAudioDevicePropertyVolumeScalar`, while Bluetooth headphones and the
+    /// built-in speakers do. When it exists the keyboard cannot reach it —
+    /// the volume keys act on the *default output device*, which is BlackHole —
+    /// so Contour surfaces it instead.
+    private(set) var interfaceVolume: Float?
 
     private(set) var meters = BlackHoleSource.Meters()
     private(set) var levels = DisplayLevels()
@@ -165,6 +202,15 @@ final class AudioEngine {
         } else {
             interface = AudioDevices.preferredInterface()
         }
+        interfaceVolume = interface.flatMap(AudioDevices.outputVolumeScalar)
+    }
+
+    var interfaceHasSoftwareVolume: Bool { interfaceVolume != nil }
+
+    func setInterfaceVolume(_ value: Float) {
+        guard let interface else { return }
+        try? AudioDevices.setOutputVolumeScalar(interface, min(max(value, 0), 1))
+        interfaceVolume = AudioDevices.outputVolumeScalar(interface)
     }
 
     // MARK: - Permissions
@@ -312,14 +358,26 @@ final class AudioEngine {
 
     // MARK: - Parameters
 
+    /// Trim actually sent to the audio thread. Auto-trim is derived here rather
+    /// than written back into `inputTrimDB`, which would recurse through the
+    /// `didSet` that triggered it and would destroy the manual value.
+    func effectiveTrimDB(for chain: Chain) -> Float {
+        let settings = settings(for: chain)
+        guard settings.autoTrim, settings.eq.isEnabled else { return settings.inputTrimDB }
+        let boost = EQCurveCache.maximumBoostDB(bands: settings.eq.bands,
+                                                adaptiveQ: settings.eq.adaptiveQ,
+                                                sampleRate: eqSampleRate)
+        return Float(max(min(-boost, 0), Double(ChainSettings.trimRange.lowerBound)))
+    }
+
     private func publishParameters() {
         let twoChains = supportsTwoChains
         parameters.publish(EngineParameters(
             a: ChainParameters(isActive: destination.includesA,
-                               inputTrim: Decibels.toLinear(chainA.inputTrimDB),
+                               inputTrim: Decibels.toLinear(effectiveTrimDB(for: .a)),
                                outputGain: Decibels.toLinear(chainA.outputGainDB)),
             b: ChainParameters(isActive: twoChains && destination.includesB,
-                               inputTrim: Decibels.toLinear(chainB.inputTrimDB),
+                               inputTrim: Decibels.toLinear(effectiveTrimDB(for: .b)),
                                outputGain: Decibels.toLinear(chainB.outputGainDB))))
     }
 
@@ -382,11 +440,10 @@ final class AudioEngine {
                     lastCallbacks = 0
                     continue
                 }
-                let meters = source.meters
+                let interval = idle ? 0.5 : 0.05
+                let meters = source.consumeMeters()
                 self.meters = meters
-                self.levels = Self.decay(self.levels,
-                                         towards: meters,
-                                         step: idle ? 12 : 2.5)
+                self.levels = Self.advance(self.levels, with: meters, interval: interval)
 
                 // A running device that stops calling back is the failure mode
                 // that otherwise presents as "it just went quiet".
@@ -403,22 +460,67 @@ final class AudioEngine {
         }
     }
 
-    /// Instant attack, fixed fall. `step` is dB per poll.
-    private static func decay(_ current: DisplayLevels,
-                              towards meters: BlackHoleSource.Meters,
-                              step: Float) -> DisplayLevels {
-        func next(_ old: Float, _ linear: Float) -> Float {
-            let new = max(Decibels.fromLinear(linear), Decibels.silenceFloor)
-            return new >= old ? new : max(old - step, new)
-        }
+    /// dB per second the bar falls, and the slower rate the peak tick falls
+    /// once its hold has expired.
+    private static let levelFallRate: Float = 60
+    private static let holdFallRate: Float = 20
+    private static let holdDuration: Double = 1.5
+
+    private static func advance(_ current: DisplayLevels,
+                                with meters: BlackHoleSource.Meters,
+                                interval: Double) -> DisplayLevels {
         var levels = current
-        levels.inputL = next(current.inputL, meters.input.left)
-        levels.inputR = next(current.inputR, meters.input.right)
-        levels.chainAL = next(current.chainAL, meters.chainA.left)
-        levels.chainAR = next(current.chainAR, meters.chainA.right)
-        levels.chainBL = next(current.chainBL, meters.chainB.left)
-        levels.chainBR = next(current.chainBR, meters.chainB.right)
+        levels.input = advance(current.input, meters.input, interval)
+        levels.chainA = advance(current.chainA, meters.chainA, interval)
+        levels.chainB = advance(current.chainB, meters.chainB, interval)
         return levels
+    }
+
+    private static func advance(_ current: StereoMeter,
+                                _ peaks: BlackHoleSource.StereoPeak,
+                                _ interval: Double) -> StereoMeter {
+        StereoMeter(left: advance(current.left, peaks.left, interval),
+                    right: advance(current.right, peaks.right, interval))
+    }
+
+    /// Instant attack, timed fall.
+    private static func advance(_ current: ChannelMeter,
+                                _ linear: Float,
+                                _ interval: Double) -> ChannelMeter {
+        var meter = current
+        let db = max(Decibels.fromLinear(linear), Decibels.silenceFloor)
+
+        meter.level = db >= meter.level
+            ? db
+            : max(db, meter.level - levelFallRate * Float(interval))
+
+        if db >= meter.hold {
+            meter.hold = db
+            meter.holdRemaining = holdDuration
+        } else {
+            meter.holdRemaining -= interval
+            if meter.holdRemaining <= 0 {
+                meter.hold = max(db, meter.hold - holdFallRate * Float(interval))
+            }
+        }
+
+        if db > meter.maximum { meter.maximum = db }
+        return meter
+    }
+
+    /// Clears the never-falling maximum for one meter. Bound to clicking its
+    /// readout.
+    func resetMaximum(_ target: MeterTarget) {
+        func cleared(_ meter: StereoMeter) -> StereoMeter {
+            var meter = meter
+            meter.left.maximum = Decibels.silenceFloor
+            meter.right.maximum = Decibels.silenceFloor
+            return meter
+        }
+        switch target {
+        case .input: levels.input = cleared(levels.input)
+        case .chain(let chain): levels[chain] = cleared(levels[chain])
+        }
     }
 
     // MARK: - Persistence
@@ -458,6 +560,20 @@ final class AudioEngine {
                 address: CA.address(selector, scope: kAudioObjectPropertyScopeOutput),
                 queue: listenerQueue) { [weak self] in
                     Task { @MainActor in self?.restart() }
+                })
+        }
+        // Volume changed elsewhere (System Settings, the headphones themselves).
+        let volumeAddress = CA.address(kAudioDevicePropertyVolumeScalar,
+                                       scope: kAudioObjectPropertyScopeOutput)
+        if CA.has(interface.id, volumeAddress) {
+            interfaceListeners.append(PropertyListener(
+                object: interface.id,
+                address: volumeAddress,
+                queue: listenerQueue) { [weak self] in
+                    Task { @MainActor in
+                        guard let self, let device = self.interface else { return }
+                        self.interfaceVolume = AudioDevices.outputVolumeScalar(device)
+                    }
                 })
         }
     }

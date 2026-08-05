@@ -115,6 +115,22 @@ final class BlackHoleSource: AudioSource {
                       channelPeaks: (0..<count).map { state.inPeaks[$0] })
     }
 
+    /// Reads the accumulated peaks and clears them, so the next read reports the
+    /// interval since this one. Racing the audio thread here can at worst drop a
+    /// single callback's peak, which is not worth a lock on a meter.
+    func consumeMeters() -> Meters {
+        let snapshot = meters
+        if let state {
+            state.inputPeakL = 0
+            state.inputPeakR = 0
+            state.chainAPeakL = 0
+            state.chainAPeakR = 0
+            state.chainBPeakL = 0
+            state.chainBPeakR = 0
+        }
+        return snapshot
+    }
+
     /// Human-readable description of what the aggregate looks like, for diagnostics.
     private(set) var layoutDescription: String = "not started"
 
@@ -287,24 +303,26 @@ final class BlackHoleSource: AudioSource {
         write(state.aL, state.aR, to: state.pairA, output, frames, &unity)
         write(state.bL, state.bR, to: state.pairB, output, frames, &unity)
 
-        // Post-gain peaks: the render block has already written the chain buffers.
-        peak(state.inL, frames, into: &state.inputPeakL)
-        peak(state.inR, frames, into: &state.inputPeakR)
-        peak(state.aL, frames, into: &state.chainAPeakL)
-        peak(state.aR, frames, into: &state.chainAPeakR)
-        peak(state.bL, frames, into: &state.chainBPeakL)
-        peak(state.bR, frames, into: &state.chainBPeakR)
+        // Post-gain peaks, accumulated as a running max until the UI consumes
+        // them. Reporting only the newest callback would miss all but one
+        // buffer in ~43 while the popover is closed.
+        accumulate(state.inL, frames, into: &state.inputPeakL)
+        accumulate(state.inR, frames, into: &state.inputPeakR)
+        accumulate(state.aL, frames, into: &state.chainAPeakL)
+        accumulate(state.aR, frames, into: &state.chainAPeakR)
+        accumulate(state.bL, frames, into: &state.chainBPeakL)
+        accumulate(state.bR, frames, into: &state.chainBPeakR)
         state.lastFrames = frames
         state.callbacks &+= 1
     }
 
     @inline(__always)
-    private static func peak(_ samples: UnsafeMutablePointer<Float>,
-                             _ frames: Int,
-                             into destination: inout Float) {
+    private static func accumulate(_ samples: UnsafeMutablePointer<Float>,
+                                   _ frames: Int,
+                                   into destination: inout Float) {
         var value: Float = 0
         vDSP_maxmgv(samples, 1, &value, vDSP_Length(frames))
-        destination = value
+        if value > destination { destination = value }
     }
 
     @inline(__always)

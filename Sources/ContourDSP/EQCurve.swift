@@ -56,6 +56,36 @@ public final class EQCurveCache {
         return composite[index]
     }
 
+    /// Peak boost of a band set without building a cache.
+    ///
+    /// Used by auto-trim, which needs the answer on every parameter change but
+    /// has no curve view to borrow one from. Evaluated on a coarser grid than
+    /// the display — the peak of a smooth response does not need 256 points.
+    public static func maximumBoostDB(bands: [EQBand],
+                                      adaptiveQ: Bool,
+                                      sampleRate: Double,
+                                      pointCount: Int = 96) -> Double {
+        guard sampleRate > 0, !bands.isEmpty else { return 0 }
+        let coefficients = bands.map {
+            EQDesign.coefficients(for: $0, sampleRate: sampleRate, adaptiveQ: adaptiveQ)
+        }
+        let logLow = log10(20.0)
+        let logHigh = log10(min(20_000.0, sampleRate / 2 * 0.99))
+        var peak = 0.0
+        for index in 0..<pointCount {
+            let t = Double(index) / Double(pointCount - 1)
+            let frequency = pow(10, logLow + t * (logHigh - logLow))
+            let normalized = frequency / sampleRate
+            var total = 0.0
+            for section in coefficients {
+                let db = section.magnitudeDB(atNormalizedFrequency: normalized)
+                if db.isFinite { total += db }
+            }
+            if total > peak { peak = total }
+        }
+        return peak
+    }
+
     private func recompute(_ index: Int, band: EQBand, adaptiveQ: Bool) {
         let coefficients = EQDesign.coefficients(for: band,
                                                  sampleRate: sampleRate,

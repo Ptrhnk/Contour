@@ -66,6 +66,10 @@ struct EngineParameters: Equatable, BitwiseCopyable {
 struct ChainSettings: Codable, Equatable, Sendable {
     var outputGainDB: Float = 0
     var inputTrimDB: Float = 0
+    /// When on, trim tracks −(peak EQ boost) continuously, so raising a band
+    /// pulls the trim down and lowering it lets the trim back up. The manual
+    /// `inputTrimDB` is kept untouched so turning auto off restores it.
+    var autoTrim: Bool = false
     var eq = EQSettings()
 
     static let gainRange: ClosedRange<Float> = -60...12
@@ -73,7 +77,7 @@ struct ChainSettings: Codable, Equatable, Sendable {
 
     /// Decoding tolerates settings saved before the EQ existed.
     enum CodingKeys: String, CodingKey {
-        case outputGainDB, inputTrimDB, eq
+        case outputGainDB, inputTrimDB, autoTrim, eq
     }
 
     init() {}
@@ -82,6 +86,7 @@ struct ChainSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         outputGainDB = try container.decodeIfPresent(Float.self, forKey: .outputGainDB) ?? 0
         inputTrimDB = try container.decodeIfPresent(Float.self, forKey: .inputTrimDB) ?? 0
+        autoTrim = try container.decodeIfPresent(Bool.self, forKey: .autoTrim) ?? false
         eq = try container.decodeIfPresent(EQSettings.self, forKey: .eq) ?? EQSettings()
     }
 }

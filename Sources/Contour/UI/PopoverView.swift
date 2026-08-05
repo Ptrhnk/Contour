@@ -22,16 +22,18 @@ struct PopoverView: View {
             InputMeterRow(engine: engine)
             Divider()
 
-            if engine.supportsTwoChains {
+            // Only the chains the current destination actually feeds. Showing a
+            // greyed-out EQ for a chain that is off is just noise.
+            if visibleChains.count > 1 {
                 Picker("", selection: $editingChain) {
-                    ForEach(Chain.allCases) { chain in
+                    ForEach(visibleChains) { chain in
                         Text(chain.title).tag(chain)
                     }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
-            ChainSection(engine: engine, chain: engine.supportsTwoChains ? editingChain : .a)
+            ChainSection(engine: engine, chain: shownChain)
 
             Divider()
             details
@@ -45,6 +47,20 @@ struct PopoverView: View {
             engine.refreshEnvironment()
         }
         .onDisappear { engine.isPopoverVisible = false }
+    }
+
+    /// Chains the destination feeds. A stereo-only interface has one regardless.
+    private var visibleChains: [Chain] {
+        guard engine.supportsTwoChains else { return [.a] }
+        switch engine.destination {
+        case .speakers: return [.a]
+        case .headphones: return [.b]
+        case .both: return Chain.allCases
+        }
+    }
+
+    private var shownChain: Chain {
+        visibleChains.contains(editingChain) ? editingChain : (visibleChains.first ?? .a)
     }
 
     // MARK: - Header
@@ -129,6 +145,23 @@ struct PopoverView: View {
                 }
                 .labelsHidden()
                 .controlSize(.small)
+            }
+            if engine.interfaceHasSoftwareVolume {
+                GridRow {
+                    Text("Volume").gridLabel()
+                    HStack(spacing: 6) {
+                        Slider(value: Binding(
+                            get: { Double(engine.interfaceVolume ?? 0) },
+                            set: { engine.setInterfaceVolume(Float($0)) }), in: 0...1)
+                            .controlSize(.small)
+                        Text("\(Int(((engine.interfaceVolume ?? 0) * 100).rounded()))%")
+                            .font(.caption.monospacedDigit())
+                            .frame(width: 34, alignment: .trailing)
+                    }
+                    .help("This device has a software volume control. The keyboard "
+                          + "keys act on the system output device (BlackHole), not "
+                          + "on this one.")
+                }
             }
             GridRow {
                 Text("Sample rate").gridLabel()

@@ -6,22 +6,20 @@ import SwiftUI
 /// `engine.levels` inside `PopoverView` or `ChainSection` invalidates the whole
 /// popover on every meter tick — which re-evaluates the EQ `Canvas`, the band
 /// pickers and three `TextField(value:format:)` number formatters twenty times a
-/// second, and costs ~30% of a core. Confining the read to these two small views
-/// keeps the redraw to the meter itself.
+/// second. Confining the read to these two small views keeps the redraw to the
+/// meter itself.
 struct InputMeterRow: View {
     var engine: AudioEngine
 
     var body: some View {
-        let levels = engine.levels
+        let meter = engine.levels.input
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Input").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Text(Format.db(max(levels.inputL, levels.inputR)))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                MaximumReadout(meter: meter) { engine.resetMaximum(.input) }
             }
-            LevelMeter(left: levels.inputL, right: levels.inputR)
+            LevelMeter(left: meter.left, right: meter.right)
         }
     }
 }
@@ -32,9 +30,33 @@ struct ChainMeterRow: View {
     let isActive: Bool
 
     var body: some View {
-        let levels = engine.levels
-        LevelMeter(left: chain == .a ? levels.chainAL : levels.chainBL,
-                   right: chain == .a ? levels.chainAR : levels.chainBR,
-                   isActive: isActive)
+        let meter = engine.levels[chain]
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Output").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                MaximumReadout(meter: meter) { engine.resetMaximum(.chain(chain)) }
+            }
+            LevelMeter(left: meter.left, right: meter.right, isActive: isActive)
+        }
+    }
+}
+
+/// The never-falling peak. Clicking it clears that meter, which is the only way
+/// to answer "does it still clip?" after changing something.
+private struct MaximumReadout: View {
+    let meter: StereoMeter
+    let reset: () -> Void
+
+    var body: some View {
+        Button(action: reset) {
+            Text(Format.db(meter.maximum))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(meter.didClip ? Color.red : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help(meter.didClip
+              ? "Peak reached full scale. Click to reset."
+              : "Maximum since reset. Click to reset.")
     }
 }
