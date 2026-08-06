@@ -309,3 +309,66 @@ struct ShelfQRangeTests {
         }
     }
 }
+
+@Suite("Loudness matching")
+struct LoudnessMatchTests {
+
+    private func bands(_ configured: [EQBand]) -> [EQBand] {
+        var all = EQBand.defaultBands.map { band -> EQBand in
+            var band = band
+            band.isEnabled = false
+            band.gainDB = 0
+            return band
+        }
+        for (index, band) in configured.enumerated() where index < all.count {
+            all[index] = band
+        }
+        return all
+    }
+
+    @Test("A flat curve needs no compensation")
+    func flatIsZero() {
+        let value = EQCurveCache.averageGainDB(bands: bands([]),
+                                               adaptiveQ: false,
+                                               sampleRate: sampleRate)
+        #expect(abs(value) < 0.01, "got \(value)")
+    }
+
+    /// The case peak-based trim cannot see: cuts lower the level while leaving
+    /// the peak boost at zero.
+    @Test("A curve of only cuts still loses level")
+    func cutsLoseLevel() {
+        let cutting = bands([
+            EQBand(id: 0, type: .bell, frequency: 200, gainDB: -6, q: 1, isEnabled: true),
+            EQBand(id: 1, type: .bell, frequency: 2_000, gainDB: -6, q: 1, isEnabled: true),
+        ])
+        let peak = EQCurveCache.maximumBoostDB(bands: cutting, adaptiveQ: false,
+                                               sampleRate: sampleRate)
+        let average = EQCurveCache.averageGainDB(bands: cutting, adaptiveQ: false,
+                                                 sampleRate: sampleRate)
+        #expect(abs(peak) < 0.01, "cuts should show no peak boost, got \(peak)")
+        #expect(average < -0.3, "cuts should lose average level, got \(average)")
+    }
+
+    @Test("A boost raises the average, and compensation is its negative")
+    func boostRaisesAverage() {
+        let boosting = bands([
+            EQBand(id: 0, type: .bell, frequency: 1_000, gainDB: 9, q: 0.7, isEnabled: true),
+        ])
+        let average = EQCurveCache.averageGainDB(bands: boosting, adaptiveQ: false,
+                                                 sampleRate: sampleRate)
+        #expect(average > 0.5, "got \(average)")
+    }
+
+    /// Equal boost and cut of the same shape should very nearly cancel.
+    @Test("Symmetric boost and cut roughly cancel")
+    func symmetricCancels() {
+        let mixed = bands([
+            EQBand(id: 0, type: .bell, frequency: 500, gainDB: 6, q: 1, isEnabled: true),
+            EQBand(id: 1, type: .bell, frequency: 5_000, gainDB: -6, q: 1, isEnabled: true),
+        ])
+        let average = EQCurveCache.averageGainDB(bands: mixed, adaptiveQ: false,
+                                                 sampleRate: sampleRate)
+        #expect(abs(average) < 1.5, "got \(average)")
+    }
+}

@@ -147,6 +147,39 @@ struct PresetBar: View {
     }
 
     private func suggestedName() -> String {
-        loaded.map { "\($0.name) copy" } ?? "Preset \(engine.presets.presets.count + 1)"
+        guard let loaded else { return "Preset \(engine.presets.presets.count + 1)" }
+        return Self.nextName(after: loaded.name,
+                             avoiding: engine.presets.presets.map(\.name))
+    }
+
+    /// Increments a trailing number, keeping its width: "NOIRE XO 01" becomes
+    /// "NOIRE XO 02", not "NOIRE XO 2" or "NOIRE XO 01 copy". Iterating a
+    /// numbered series is the usual reason to save a preset as new, so that is
+    /// what the field should already say.
+    ///
+    /// Skips names already taken, so it lands on the next free number rather
+    /// than colliding and being renamed by the store.
+    static func nextName(after name: String, avoiding taken: [String]) -> String {
+        let trailingDigits = String(name.reversed().prefix { $0.isNumber }.reversed())
+        guard !trailingDigits.isEmpty, let start = Int(trailingDigits) else {
+            return uniqueName("\(name) copy", avoiding: taken)
+        }
+        let stem = String(name.dropLast(trailingDigits.count))
+        let width = trailingDigits.count
+
+        for value in (start + 1)...(start + 999) {
+            // Zero padding only holds while the number fits the original width;
+            // 09 goes to 10, and 99 to 100 rather than being truncated.
+            let candidate = stem + String(format: "%0\(width)d", value)
+            if !taken.contains(candidate) { return candidate }
+        }
+        return uniqueName("\(name) copy", avoiding: taken)
+    }
+
+    private static func uniqueName(_ proposed: String, avoiding taken: [String]) -> String {
+        guard taken.contains(proposed) else { return proposed }
+        var index = 2
+        while taken.contains("\(proposed) \(index)") { index += 1 }
+        return "\(proposed) \(index)"
     }
 }

@@ -10,14 +10,16 @@ import SwiftUI
 struct EQWindowView: View {
     @Bindable var engine: AudioEngine
 
-    /// Floating by default: Contour has no Dock icon and no ⌘-Tab entry, so a
-    /// window that falls behind another app is genuinely hard to retrieve.
-    @AppStorage("eqWindowFloating") private var isFloating = true
     @State private var chain: Chain = .a
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
+    @State private var transferMessage: String?
 
     static let id = "eq-editor"
+    static let windowTitle = "Contour EQ"
+
+    /// Equal widths, so the middle knob sits on the group's centre line.
+    private static let knobColumnWidth: CGFloat = 74
 
     private static let trimRange =
         Double(ChainSettings.trimRange.lowerBound)...Double(ChainSettings.trimRange.upperBound)
@@ -41,6 +43,11 @@ struct EQWindowView: View {
         shownChain == .a ? $engine.chainA : $engine.chainB
     }
 
+    /// The trim in force: derived when auto-trim is on, manual otherwise.
+    private var shownTrimDB: Float {
+        engine.effectiveTrimDB(for: shownChain)
+    }
+
     private var band: Binding<EQBand> {
         Binding(get: { settings.wrappedValue.eq.bands[safe: selectedBand] },
                 set: { settings.wrappedValue.eq.bands[safe: selectedBand] = $0 })
@@ -50,21 +57,37 @@ struct EQWindowView: View {
         VStack(spacing: 12) {
             toolbar
 
+            if let transferMessage {
+                Text(transferMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             EQCurveView(settings: settings.eq,
                         selectedBand: $selectedBand,
                         model: model,
                         sampleRate: engine.eqSampleRate,
                         handleRadius: 13)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .disabled(!settings.wrappedValue.eq.isEnabled)
                 .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
 
             bandStrip
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+            Divider()
+
+            // Below the EQ: the list is the signal path, and reading it under
+            // the thing being edited matches the order audio actually travels.
+            ProcessingListView(engine: engine, chain: shownChain)
+
             Divider()
             levels
         }
         .padding(16)
         .frame(minWidth: 720, minHeight: 520)
-        .background(WindowConfigurator(isFloating: isFloating).frame(width: 0, height: 0))
+        .background(WindowConfigurator().frame(width: 0, height: 0))
         .onAppear { engine.beginObservingMeters() }
         .onDisappear { engine.endObservingMeters() }
     }
@@ -100,14 +123,34 @@ struct EQWindowView: View {
 
             Divider().frame(height: 16)
 
-            Toggle("EQ", isOn: settings.eq.isEnabled).toggleStyle(.checkbox)
+            PowerToggle(isOn: settings.eq.isEnabled, diameter: 20)
+                .help(settings.wrappedValue.eq.isEnabled ? "EQ on" : "EQ off")
+            Text("EQ").font(.callout.weight(.medium))
+            AutoEqTransferButton(settings: settings) { transferMessage = $0 }
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
             Button("Flatten") {
                 for index in settings.wrappedValue.eq.bands.indices {
                     settings.wrappedValue.eq.bands[index].gainDB = 0
                 }
             }
-            .disabled(settings.wrappedValue.eq.bands.allSatisfy { $0.gainDB == 0 })
-            Toggle("Adapt. Q", isOn: settings.eq.adaptiveQ).toggleStyle(.checkbox)
+            .disabled(!settings.wrappedValue.eq.isEnabled
+                      || settings.wrappedValue.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+            // Everything EQ-related greys with it — except the power toggle
+            // itself, which has to stay live to switch it back on.
+            Toggle("Match", isOn: settings.loudnessMatch)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+                .help("Compensate the EQ's average level change, so switching it "
+                      + "off does not also change loudness.")
+            Toggle("Adapt. Q", isOn: settings.eq.adaptiveQ)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
 
             Spacer()
 
@@ -129,12 +172,6 @@ struct EQWindowView: View {
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
 
-            Toggle(isOn: $isFloating) {
-                Image(systemName: isFloating ? "pin.fill" : "pin.slash")
-            }
-            .toggleStyle(.button)
-            .help("Keep this window above other apps. Contour has no Dock icon, "
-                  + "so an unpinned window can be hard to find again.")
         }
     }
 
@@ -165,38 +202,30 @@ struct EQWindowView: View {
                 }
             }
 
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Type").font(.system(size: 10)).foregroundStyle(.secondary)
-                    Picker("", selection: band.type) {
-                        ForEach(EQBandType.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 130)
-                }
-
-                Spacer(minLength: 0)
-
-                HStack(alignment: .top, spacing: 22) {
-                    knob("Freq", band.frequency, EQBand.frequencyRange, logarithmic: true,
-                         defaultValue: nil, width: 78)
-                    knob("Gain", band.gainDB, EQBand.gainRange, logarithmic: false,
-                         defaultValue: 0, width: 66)
-                        .disabled(!band.wrappedValue.type.usesGain)
-                        .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
-                    knob("Q", band.q, band.wrappedValue.editableQRange, logarithmic: true,
-                         defaultValue: 0.7, width: 60)
-                }
-
-                Spacer(minLength: 0)
-
-                VStack(alignment: .trailing, spacing: 3) {
+            HStack(alignment: .center, spacing: 0) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text("Band \(selectedBand + 1)")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                    Toggle("On", isOn: band.isEnabled).toggleStyle(.checkbox)
+                    FilterTypePicker(type: band.type,
+                                     iconSize: CGSize(width: 26, height: 18))
                 }
-                .frame(width: 130, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(alignment: .top, spacing: 22) {
+                    knob("Freq", band.frequency, EQBand.frequencyRange, logarithmic: true,
+                         defaultValue: nil, width: Self.knobColumnWidth)
+                    knob("Gain", band.gainDB, EQBand.gainRange, logarithmic: false,
+                         defaultValue: 0, width: Self.knobColumnWidth)
+                        .disabled(!band.wrappedValue.type.usesGain)
+                        .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
+                    knob("Q", band.q, band.wrappedValue.editableQRange, logarithmic: true,
+                         defaultValue: 0.7, width: Self.knobColumnWidth)
+                }
+
+                PowerToggle(isOn: band.isEnabled, diameter: 34)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(band.wrappedValue.isEnabled ? "Band on" : "Band off")
             }
         }
     }
@@ -247,13 +276,21 @@ struct EQWindowView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text("Trim").font(.caption).foregroundStyle(.secondary).frame(width: 32,
-                                                                                 alignment: .leading)
+                    Text("Trim").font(.caption).foregroundStyle(.secondary)
+                        .frame(width: 32, alignment: .leading)
+                    // Shows the trim actually in force. Binding the slider to
+                    // the manual value while auto-trim drives the audio meant
+                    // the window disagreed with both the popover and the sound.
                     Slider(value: Binding(
-                        get: { Double(settings.wrappedValue.inputTrimDB) },
+                        get: { Double(shownTrimDB) },
                         set: { settings.wrappedValue.inputTrimDB = Float($0) }),
                            in: Self.trimRange)
                         .disabled(settings.wrappedValue.autoTrim)
+                    Text(String(format: "%.1f dB", shownTrimDB))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(settings.wrappedValue.autoTrim
+                                         ? Color.accentColor : .primary)
+                        .frame(width: 56, alignment: .trailing)
                     Toggle("Auto", isOn: settings.autoTrim)
                         .toggleStyle(.button)
                         .controlSize(.small)

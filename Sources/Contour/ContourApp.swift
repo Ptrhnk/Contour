@@ -18,7 +18,7 @@ struct ContourApp: App {
 
         // A real window, so it can be centred and resized — the menu-bar panel
         // offers no placement control.
-        Window("Contour EQ", id: EQWindowView.id) {
+        Window(EQWindowView.windowTitle, id: EQWindowView.id) {
             EQWindowView(engine: delegate.engine)
         }
         .defaultSize(width: 900, height: 620)
@@ -97,6 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // outlive every window.
         ProcessInfo.processInfo.disableAutomaticTermination("Contour renders audio continuously")
         installStatusItemContextMenu()
+        // Warm the plugin list now rather than when the picker is first opened,
+        // where the wait is in the way.
+        engine.catalog.scanIfNeeded()
         engine.start()
     }
 
@@ -105,6 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Plugin settings live inside the plugin until asked for.
+        for chain in Chain.allCases { engine.capturePluginStates(for: chain) }
         engine.stop()
     }
 }

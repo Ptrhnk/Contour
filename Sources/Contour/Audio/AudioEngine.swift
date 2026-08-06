@@ -111,6 +111,7 @@ final class AudioEngine {
             save(chainA, forKey: Keys.chainA)
             publishParameters()
             if chainA.eq != oldValue.eq { eqA.update(settings: chainA.eq, sampleRate: eqSampleRate) }
+            if chainA.processing != oldValue.processing { rebuildGraph(for: .a) }
         }
     }
 
@@ -121,6 +122,7 @@ final class AudioEngine {
             save(chainB, forKey: Keys.chainB)
             publishParameters()
             if chainB.eq != oldValue.eq { eqB.update(settings: chainB.eq, sampleRate: eqSampleRate) }
+            if chainB.processing != oldValue.processing { rebuildGraph(for: .b) }
         }
     }
 
@@ -194,8 +196,18 @@ final class AudioEngine {
     private let trimRampB = GainRamp()
     private let gainRampA = GainRamp()
     private let gainRampB = GainRamp()
+    private let makeupRampA = GainRamp()
+    private let makeupRampB = GainRamp()
 
     let presets = PresetStore()
+    let catalog = AudioUnitCatalog()
+
+    /// Live plugins per chain, keyed by processing-item id, so a rebuild reuses
+    /// instances rather than tearing down and re-instantiating everything.
+    private var liveHosts: [Chain: [UUID: PluginHost]] = [.a: [:], .b: [:]]
+    private var graphBuilds: [Chain: Task<Void, Never>] = [:]
+    private(set) var pluginLatencyFrames: [Chain: Int] = [.a: 0, .b: 0]
+    private(set) var pluginFailure: String?
 
     /// Which preset each chain currently has loaded, if any.
     private(set) var loadedPresetA: UUID?
@@ -377,6 +389,9 @@ final class AudioEngine {
             eqA.reset()
             eqB.reset()
             publishEQ()
+            // Plugins are allocated for a specific sample rate.
+            rebuildGraph(for: .a)
+            rebuildGraph(for: .b)
             status = .running
             installInterfaceListeners()
             Self.log.notice("""
@@ -442,6 +457,164 @@ final class AudioEngine {
         refreshEnvironment()
     }
 
+    // MARK: - Plugins
+
+    /// Rebuilds one chain's graph and swaps it in.
+    ///
+    /// Instantiation and `allocateRenderResources` happen here, off the audio
+    /// thread; the realtime side only ever sees an index change (§6a). Existing
+    /// instances are reused, so reordering or bypassing never reloads a plugin.
+    func rebuildGraph(for chain: Chain) {
+        graphBuilds[chain]?.cancel()
+        let settings = settings(for: chain)
+
+        // Bypassing or reordering never needs a new instance, so when every
+        // plugin is already live the graph is rebuilt here and now. Going
+        // through the async path meant a plugin that blocks — SoundID Reference
+        // does — could stall the rebuild, leaving the *previous* graph running.
+        // That looks exactly like a bypass that did nothing.
+        if let graph = graphFromLiveHosts(settings: settings, chain: chain) {
+            eq(for: chain).graphs.publish(graph)
+            pluginLatencyFrames[chain] = graph.latencyFrames
+            Self.log.notice("""
+                \(chain.title, privacy: .public) graph rebuilt from live plugins: \
+                \(Self.describe(graph), privacy: .public)
+                """)
+            return
+        }
+
+        let sampleRate = eqSampleRate
+        let frames = BlackHoleSource.scratchCapacity
+
+        graphBuilds[chain] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var hosts = self.liveHosts[chain] ?? [:]
+            var failure: String?
+            let log = AudioEngine.log
+            log.notice("rebuilding \(chain.title, privacy: .public) graph")
+
+            func host(for item: ProcessingItem) async -> PluginHost? {
+                guard let descriptor = item.descriptor else { return nil }
+                if let existing = hosts[item.id],
+                   existing.descriptor.id == descriptor.id {
+                    // Reused instances get the stored state too, or loading the
+                    // same preset twice would keep whatever was tweaked in
+                    // between. Callers capture live state before mutating the
+                    // list, so this never overwrites unsaved work.
+                    if let state = item.state { existing.fullState = state }
+                    return existing
+                }
+                do {
+                    // Detached, so it runs off the main actor. Loading a plugin
+                    // calls into the plugin's own code, which can block for a
+                    // long time or indefinitely — on the main actor that is a
+                    // frozen app, and it froze on every launch for a chain that
+                    // had such a plugin saved in it.
+                    let created = try await Task.detached(priority: .userInitiated) {
+                        try await PluginHost(descriptor: descriptor,
+                                             sampleRate: sampleRate,
+                                             maximumFrames: frames)
+                    }.value
+                    created.fullState = item.state
+                    hosts[item.id] = created
+                    return created
+                } catch {
+                    let name = descriptor.name
+                    failure = "\(name): \(error.localizedDescription)"
+                    let detail = String(describing: error)
+                    log.error("could not load \(name, privacy: .public): \(detail, privacy: .public)")
+                    return nil
+                }
+            }
+
+            // A bypassed plugin is instantiated but left out of the graph
+            // entirely, so no audio passes through it and it costs no CPU —
+            // `shouldBypassEffect` alone still renders, which is why the
+            // plugin's own meters kept moving. Keeping the instance alive is
+            // what makes re-enabling instant and preset switching click-free
+            // (§6a).
+            var before: [PluginHost] = []
+            for item in settings.pluginsBeforeEQ {
+                guard let created = await host(for: item) else { continue }
+                created.isBypassed = item.isBypassed
+                if !item.isBypassed { before.append(created) }
+            }
+            var after: [PluginHost] = []
+            for item in settings.pluginsAfterEQ {
+                guard let created = await host(for: item) else { continue }
+                created.isBypassed = item.isBypassed
+                if !item.isBypassed { after.append(created) }
+            }
+
+            guard !Task.isCancelled else { return }
+
+            // Drop instances no longer referenced, returning their RAM (§4).
+            let referenced = Set(settings.processing.map(\.id))
+            hosts = hosts.filter { referenced.contains($0.key) }
+            self.liveHosts[chain] = hosts
+
+            let graph = ProcessingGraph(before: before, after: after)
+            self.eq(for: chain).graphs.publish(graph)
+            self.pluginLatencyFrames[chain] = graph.latencyFrames
+            self.pluginFailure = failure
+            Self.log.notice("""
+                \(chain.title, privacy: .public) graph: \
+                \(AudioEngine.describe(graph), privacy: .public)
+                """)
+        }
+    }
+
+    /// A graph built only from instances already loaded, or nil when something
+    /// would have to be instantiated.
+    private func graphFromLiveHosts(settings: ChainSettings, chain: Chain) -> ProcessingGraph? {
+        let hosts = liveHosts[chain] ?? [:]
+        var before: [PluginHost] = []
+        var after: [PluginHost] = []
+
+        for item in settings.processing where !item.isEQ {
+            guard let descriptor = item.descriptor,
+                  let host = hosts[item.id],
+                  host.descriptor.id == descriptor.id
+            else { return nil }
+            host.isBypassed = item.isBypassed
+        }
+        for item in settings.pluginsBeforeEQ {
+            guard let host = hosts[item.id] else { return nil }
+            if !item.isBypassed { before.append(host) }
+        }
+        for item in settings.pluginsAfterEQ {
+            guard let host = hosts[item.id] else { return nil }
+            if !item.isBypassed { after.append(host) }
+        }
+        return ProcessingGraph(before: before, after: after)
+    }
+
+    private static func describe(_ graph: ProcessingGraph) -> String {
+        let names = graph.before.map { "\($0.descriptor.name) (pre)" }
+            + graph.after.map { "\($0.descriptor.name) (post)" }
+        return names.isEmpty ? "EQ only" : names.joined(separator: ", ")
+    }
+
+    /// Captures each plugin's own state so it can be persisted with the chain.
+    func capturePluginStates(for chain: Chain) {
+        var settings = settings(for: chain)
+        var changed = false
+        for index in settings.processing.indices {
+            let item = settings.processing[index]
+            guard !item.isEQ, let host = liveHosts[chain]?[item.id] else { continue }
+            let state = host.fullState
+            if state != item.state {
+                settings.processing[index].state = state
+                changed = true
+            }
+        }
+        if changed { setSettings(settings, for: chain) }
+    }
+
+    func pluginHost(for item: ProcessingItem, chain: Chain) -> PluginHost? {
+        liveHosts[chain]?[item.id]
+    }
+
     // MARK: - Undo
 
     var canUndo: Bool { history.canUndo }
@@ -492,13 +665,18 @@ final class AudioEngine {
         setLoadedPreset(preset.id, for: chain)
     }
 
+    /// Captures first: a plugin's own settings live inside the plugin until
+    /// asked for, so a preset saved without this records the curve and misses
+    /// everything the plugin was set to.
     func savePresetAsNew(named name: String, from chain: Chain) {
+        capturePluginStates(for: chain)
         let preset = presets.add(name: name, settings: settings(for: chain))
         setLoadedPreset(preset.id, for: chain)
     }
 
     func updateLoadedPreset(from chain: Chain) {
         guard let id = loadedPresetID(for: chain) else { return }
+        capturePluginStates(for: chain)
         presets.update(id: id, settings: settings(for: chain))
     }
 
@@ -514,21 +692,39 @@ final class AudioEngine {
     /// Trim actually sent to the audio thread. Auto-trim is derived here rather
     /// than written back into `inputTrimDB`, which would recurse through the
     /// `didSet` that triggered it and would destroy the manual value.
+    /// Deliberately independent of whether the EQ is switched on. Letting the
+    /// trim jump back to zero when the EQ is bypassed makes the bypassed path
+    /// louder, and a louder A/B always wins — which is the exact comparison this
+    /// control exists to keep honest (§3.3).
     func effectiveTrimDB(for chain: Chain) -> Float {
         let settings = settings(for: chain)
-        guard settings.autoTrim, settings.eq.isEnabled else { return settings.inputTrimDB }
+        guard settings.autoTrim else { return settings.inputTrimDB }
         let boost = EQCurveCache.maximumBoostDB(bands: settings.eq.bands,
                                                 adaptiveQ: settings.eq.adaptiveQ,
                                                 sampleRate: eqSampleRate)
         return Float(max(min(-boost, 0), Double(ChainSettings.trimRange.lowerBound)))
     }
 
+    /// Undoes the EQ's average level change, so switching the EQ off does not
+    /// also change loudness and hand the comparison to whichever side is louder
+    /// (§3.3). Zero when the EQ is off, because then there is nothing to undo.
+    func loudnessMatchDB(for chain: Chain) -> Float {
+        let settings = settings(for: chain)
+        guard settings.loudnessMatch, settings.eq.isEnabled else { return 0 }
+        let average = EQCurveCache.averageGainDB(bands: settings.eq.bands,
+                                                 adaptiveQ: settings.eq.adaptiveQ,
+                                                 sampleRate: eqSampleRate)
+        return Float(-average)
+    }
+
     private func publishParameters() {
         parameters.publish(EngineParameters(
             a: ChainParameters(isActive: isChainActive(.a),
+                               eqMakeup: Decibels.toLinear(loudnessMatchDB(for: .a)),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .a)),
                                outputGain: Decibels.toLinear(chainA.outputGainDB)),
             b: ChainParameters(isActive: isChainActive(.b),
+                               eqMakeup: Decibels.toLinear(loudnessMatchDB(for: .b)),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .b)),
                                outputGain: Decibels.toLinear(chainB.outputGainDB))))
     }
@@ -554,6 +750,8 @@ final class AudioEngine {
         let trimRampB = self.trimRampB
         let gainRampA = self.gainRampA
         let gainRampB = self.gainRampB
+        let makeupRampA = self.makeupRampA
+        let makeupRampB = self.makeupRampB
         return { buffers in
             let values = parameters.current()
             let frames = buffers.frameCount
@@ -564,7 +762,11 @@ final class AudioEngine {
                 memcpy(buffers.chainAR, buffers.inputR, bytes)
                 trimRampA.apply(target: values.a.inputTrim,
                                 left: buffers.chainAL, right: buffers.chainAR, frames: frames)
-                eqA.process(left: buffers.chainAL, right: buffers.chainAR, frames: frames)
+                eqA.process(left: buffers.chainAL, right: buffers.chainAR,
+                             frames: frames, timestamp: buffers.timestamp)
+                makeupRampA.apply(target: values.a.eqMakeup,
+                                  left: buffers.chainAL, right: buffers.chainAR,
+                                  frames: frames)
                 gainRampA.apply(target: values.a.outputGain,
                                 left: buffers.chainAL, right: buffers.chainAR, frames: frames)
             }
@@ -573,7 +775,11 @@ final class AudioEngine {
                 memcpy(buffers.chainBR, buffers.inputR, bytes)
                 trimRampB.apply(target: values.b.inputTrim,
                                 left: buffers.chainBL, right: buffers.chainBR, frames: frames)
-                eqB.process(left: buffers.chainBL, right: buffers.chainBR, frames: frames)
+                eqB.process(left: buffers.chainBL, right: buffers.chainBR,
+                             frames: frames, timestamp: buffers.timestamp)
+                makeupRampB.apply(target: values.b.eqMakeup,
+                                  left: buffers.chainBL, right: buffers.chainBR,
+                                  frames: frames)
                 gainRampB.apply(target: values.b.outputGain,
                                 left: buffers.chainBL, right: buffers.chainBR, frames: frames)
             }

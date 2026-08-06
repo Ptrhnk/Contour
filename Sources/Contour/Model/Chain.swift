@@ -43,6 +43,9 @@ enum Chain: Int, CaseIterable, Identifiable, Sendable {
 /// the audio thread through `TripleBuffer`, so it must stay `BitwiseCopyable`.
 struct ChainParameters: Equatable, BitwiseCopyable {
     var isActive: Bool = true
+    /// Applied after the EQ, and only while it is enabled, so bypassing the EQ
+    /// does not change loudness.
+    var eqMakeup: Float = 1
     /// Linear, not dB. Applied before the processing list; the EQ's
     /// "compensate for max boost" action will drive this in step 3.
     var inputTrim: Float = 1
@@ -61,6 +64,46 @@ struct EngineParameters: Equatable, BitwiseCopyable {
     }
 }
 
+/// One entry in a chain's processing list.
+///
+/// The list replaces a pre/post-EQ distinction with something simpler: drag the
+/// EQ above or below a plugin (§4).
+struct ProcessingItem: Codable, Equatable, Sendable, Identifiable {
+    enum Kind: Codable, Equatable, Sendable {
+        case eq
+        case plugin(AudioUnitDescriptor)
+    }
+
+    var id: UUID
+    var kind: Kind
+    var isBypassed: Bool
+    /// `fullStateForDocument`, opaque binary. Only restores where the same
+    /// plugin is installed, which is why presets are personal configuration
+    /// rather than something to share (§6a).
+    var state: Data?
+
+    init(id: UUID = UUID(), kind: Kind, isBypassed: Bool = false, state: Data? = nil) {
+        self.id = id
+        self.kind = kind
+        self.isBypassed = isBypassed
+        self.state = state
+    }
+
+    var isEQ: Bool { if case .eq = kind { return true } else { return false } }
+
+    var descriptor: AudioUnitDescriptor? {
+        if case .plugin(let descriptor) = kind { return descriptor }
+        return nil
+    }
+
+    var title: String {
+        switch kind {
+        case .eq: "EQ"
+        case .plugin(let descriptor): descriptor.name
+        }
+    }
+}
+
 /// UI-side settings for one chain, persisted. Gains live here in dB because
 /// that is what the user edits; the linear conversion happens on publish.
 struct ChainSettings: Codable, Equatable, Sendable {
@@ -70,14 +113,21 @@ struct ChainSettings: Codable, Equatable, Sendable {
     /// pulls the trim down and lowering it lets the trim back up. The manual
     /// `inputTrimDB` is kept untouched so turning auto off restores it.
     var autoTrim: Bool = false
+    /// Compensates the EQ's average level change so switching it off does not
+    /// also change loudness. Peak-based trim cannot do this: a curve of cuts has
+    /// no peak boost and still gets quieter.
+    var loudnessMatch: Bool = false
     var eq = EQSettings()
+    /// Ordered: everything before the EQ entry runs first, everything after it
+    /// runs last. Always contains exactly one `.eq`.
+    var processing: [ProcessingItem] = [ProcessingItem(kind: .eq)]
 
     static let gainRange: ClosedRange<Float> = -60...12
     static let trimRange: ClosedRange<Float> = -24...0
 
     /// Decoding tolerates settings saved before the EQ existed.
     enum CodingKeys: String, CodingKey {
-        case outputGainDB, inputTrimDB, autoTrim, eq
+        case outputGainDB, inputTrimDB, autoTrim, loudnessMatch, eq, processing
     }
 
     init() {}
@@ -87,7 +137,26 @@ struct ChainSettings: Codable, Equatable, Sendable {
         outputGainDB = try container.decodeIfPresent(Float.self, forKey: .outputGainDB) ?? 0
         inputTrimDB = try container.decodeIfPresent(Float.self, forKey: .inputTrimDB) ?? 0
         autoTrim = try container.decodeIfPresent(Bool.self, forKey: .autoTrim) ?? false
+        loudnessMatch = try container.decodeIfPresent(Bool.self, forKey: .loudnessMatch) ?? false
         eq = try container.decodeIfPresent(EQSettings.self, forKey: .eq) ?? EQSettings()
+        processing = try container.decodeIfPresent([ProcessingItem].self, forKey: .processing)
+            ?? [ProcessingItem(kind: .eq)]
+        // Settings saved before the processing list existed, or edited by hand,
+        // must still end up with exactly one EQ entry.
+        if !processing.contains(where: \.isEQ) {
+            processing.insert(ProcessingItem(kind: .eq), at: 0)
+        }
+    }
+
+    /// Plugins that run before the EQ, then those after it.
+    var pluginsBeforeEQ: [ProcessingItem] {
+        guard let index = processing.firstIndex(where: \.isEQ) else { return [] }
+        return Array(processing[..<index]).filter { !$0.isEQ }
+    }
+
+    var pluginsAfterEQ: [ProcessingItem] {
+        guard let index = processing.firstIndex(where: \.isEQ) else { return processing }
+        return Array(processing[processing.index(after: index)...]).filter { !$0.isEQ }
     }
 }
 

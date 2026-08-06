@@ -1,5 +1,7 @@
+import AppKit
 import ContourDSP
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Curve plus numeric editing for the selected band.
 ///
@@ -12,6 +14,14 @@ struct EQSection: View {
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
 
+    @State private var transferMessage: String?
+
+    /// All three the same width, so the middle knob's centre *is* the group's
+    /// centre. With 60/52/48 the group centred correctly but Gain sat about six
+    /// points right of it, which is exactly the sort of near-miss that reads as
+    /// broken.
+    private static let knobColumnWidth: CGFloat = 56
+
     private static let trimRange =
         Double(ChainSettings.trimRange.lowerBound)...Double(ChainSettings.trimRange.upperBound)
 
@@ -22,27 +32,42 @@ struct EQSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
-
             // The curve has no intrinsic height any more, so the popover sets
             // one; the large window lets it fill instead.
+            header
             EQCurveView(settings: $settings.eq,
                         selectedBand: $selectedBand,
                         model: model,
                         sampleRate: sampleRate)
                 .frame(height: 150)
                 .opacity(settings.eq.isEnabled ? 1 : 0.4)
+                .onDrop(of: [.fileURL, .plainText], isTargeted: nil, perform: handleDrop)
+                .disabled(!settings.eq.isEnabled)
 
             bandEditor
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
             trimRow
+
+            if let transferMessage {
+                Text(transferMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Toggle("EQ", isOn: $settings.eq.isEnabled)
-                .toggleStyle(.checkbox)
-                .font(.callout.weight(.medium))
+        HStack(alignment: .center, spacing: 6) {
+            // The processing list moved below the EQ, so its copy of this
+            // toggle is now past the panel it controls. This one stays live
+            // while everything else in the header greys, because it is the way
+            // back on.
+            PowerToggle(isOn: $settings.eq.isEnabled, diameter: 18)
+                .help(settings.eq.isEnabled ? "EQ on" : "EQ off")
+            Text("EQ").font(.callout.weight(.medium))
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
             Spacer()
             // Gains only. Frequencies, Qs, types and enabled flags survive, so a
             // curve you have shaped can be flattened and rebuilt without losing
@@ -53,11 +78,36 @@ struct EQSection: View {
                 }
             }
             .controlSize(.small)
-            .disabled(settings.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .disabled(!settings.eq.isEnabled
+                      || settings.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .opacity(settings.eq.isEnabled ? 1 : 0.4)
             .help("Set every band's gain to 0 dB. Frequencies and Q are kept.")
+            AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
+
+            // A divider, because what follows is state rather than an action.
+            // Filled means "currently on", which Flatten can never be.
+            Divider().frame(height: 12)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
+
+            Toggle("Match", isOn: $settings.loudnessMatch)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
+                .help("Compensate the EQ's average level change, so switching it "
+                      + "off does not also change loudness. "
+                      + (settings.loudnessMatch
+                         ? String(format: "Currently %+.1f dB.", matchDB) : "")
+                      + " Peak trim cannot do this: a curve of cuts has no peak "
+                      + "boost and still gets quieter.")
+
             Toggle("Adapt. Q", isOn: $settings.eq.adaptiveQ)
-                .toggleStyle(.checkbox)
-                .font(.caption)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
                 .help("Q widens as gain approaches zero. Off by default so imported "
                       + "AutoEq and EQ Eight curves keep their exact Q values.")
         }
@@ -85,46 +135,41 @@ struct EQSection: View {
                             .foregroundStyle(item.isEnabled ? .primary : .secondary)
                     }
                     .buttonStyle(.plain)
-                    .help(item.isEnabled ? item.type.title : "\(item.type.title) (off)")
+                    .onRightClick { settings.eq.bands[index].isEnabled.toggle() }
+                    .help(item.isEnabled
+                          ? "\(item.type.title) — right-click to disable"
+                          : "\(item.type.title) (off) — right-click to enable")
                 }
             }
 
-            // Equal-width side columns so the knobs land optically centred
-            // rather than merely "after" the type picker.
-            HStack(alignment: .top, spacing: 8) {
+            // Both sides take whatever is left over, equally, so the knob group
+            // lands on the true centre without anyone having to guess widths.
+            // Fixed side columns plus HStack spacing added up to more than the
+            // popover is wide, which collapsed the spacers and pushed the whole
+            // row off centre.
+            HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Band \(selectedBand + 1)")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
-                    Picker("", selection: band.type) {
-                        ForEach(EQBandType.allCases, id: \.self) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .labelsHidden()
-                    .controlSize(.small)
+                    FilterTypePicker(type: band.type)
                 }
-                .frame(width: 96, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 0)
-
-                // Knobs and the On toggle form one group, centred in the space
-                // left of the type column. Giving On its own fixed column made
-                // its unused width show up as a gutter on the right edge.
-                HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
                     knobColumn(title: "Freq",
                                value: band.frequency,
                                range: EQBand.frequencyRange,
                                logarithmic: true,
                                defaultValue: nil,
-                               fieldWidth: 60)
+                               fieldWidth: Self.knobColumnWidth)
 
                     knobColumn(title: "Gain",
                                value: band.gainDB,
                                range: EQBand.gainRange,
                                logarithmic: false,
                                defaultValue: 0,
-                               fieldWidth: 52)
+                               fieldWidth: Self.knobColumnWidth)
                         .disabled(!band.wrappedValue.type.usesGain)
                         .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
 
@@ -133,15 +178,15 @@ struct EQSection: View {
                                range: band.wrappedValue.editableQRange,
                                logarithmic: true,
                                defaultValue: 0.7,
-                               fieldWidth: 48)
-
-                    Toggle("On", isOn: band.isEnabled)
-                        .toggleStyle(.checkbox)
-                        .font(.caption)
-                        .padding(.top, 12)
+                               fieldWidth: Self.knobColumnWidth)
                 }
 
-                Spacer(minLength: 0)
+                PowerToggle(isOn: band.isEnabled, diameter: 26)
+                    .padding(.top, 14)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(band.wrappedValue.isEnabled
+                          ? "Band on. Disabled bands leave the cascade entirely."
+                          : "Band off")
             }
         }
     }
@@ -185,11 +230,44 @@ struct EQSection: View {
             .frame(width: width)
     }
 
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            // NSURL, not URL: only the former conforms to NSItemProviderReading.
+            _ = provider.loadObject(ofClass: NSURL.self) { item, _ in
+                guard let url = item as? URL,
+                      let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+                Task { @MainActor in importDropped(text) }
+            }
+            return true
+        }
+        _ = provider.loadObject(ofClass: NSString.self) { text, _ in
+            guard let text = text as? String else { return }
+            Task { @MainActor in importDropped(text) }
+        }
+        return true
+    }
+
+    private func importDropped(_ text: String) {
+        var updated = settings
+        transferMessage = AutoEqTransfer.apply(text, to: &updated)
+        settings = updated
+    }
+
     // MARK: - Trim
 
     /// Shown value: the derived one when auto is on, the manual one otherwise.
+    private var matchDB: Double {
+        -EQCurveCache.averageGainDB(bands: settings.eq.bands,
+                                    adaptiveQ: settings.eq.adaptiveQ,
+                                    sampleRate: sampleRate)
+    }
+
+    /// Independent of the EQ's on/off state, so toggling the EQ does not change
+    /// the level and spoil the comparison.
     private var shownTrimDB: Float {
-        settings.autoTrim && settings.eq.isEnabled ? autoTrimDB : settings.inputTrimDB
+        settings.autoTrim ? autoTrimDB : settings.inputTrimDB
     }
 
     private var autoTrimDB: Float {

@@ -224,8 +224,8 @@ final class BlackHoleSource: AudioSource {
             var procID: AudioDeviceIOProcID?
             try CA.check(
                 AudioDeviceCreateIOProcIDWithBlock(&procID, aggregate.id, nil) {
-                    _, inputData, _, outputData, _ in
-                    Self.process(opaque, inputData, outputData)
+                    now, inputData, _, outputData, _ in
+                    Self.process(opaque, now, inputData, outputData)
                 },
                 "create IOProc")
             self.procID = procID
@@ -260,6 +260,7 @@ final class BlackHoleSource: AudioSource {
 
     /// Realtime thread. No allocation, no locks, no logging, no new objects.
     private static func process(_ opaque: UnsafeMutableRawPointer,
+                                _ timestamp: UnsafePointer<AudioTimeStamp>,
                                 _ inputData: UnsafePointer<AudioBufferList>,
                                 _ outputData: UnsafeMutablePointer<AudioBufferList>) {
         let state = Unmanaged<RenderState>.fromOpaque(opaque).takeUnretainedValue()
@@ -326,7 +327,8 @@ final class BlackHoleSource: AudioSource {
         vDSP_vclr(state.bL, 1, vDSP_Length(frames))
         vDSP_vclr(state.bR, 1, vDSP_Length(frames))
 
-        state.render(RenderBuffers(inputL: state.inL,
+        state.render(RenderBuffers(timestamp: timestamp,
+                                   inputL: state.inL,
                                    inputR: state.inR,
                                    chainAL: state.aL,
                                    chainAR: state.aR,
