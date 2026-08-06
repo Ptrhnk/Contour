@@ -72,9 +72,12 @@ struct EQWindowView: View {
                         sampleRate: engine.eqSampleRate,
                         handleRadius: 13)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .disabled(!settings.wrappedValue.eq.isEnabled)
                 .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
 
             bandStrip
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
             Divider()
             levels
         }
@@ -120,20 +123,30 @@ struct EQWindowView: View {
                 .help(settings.wrappedValue.eq.isEnabled ? "EQ on" : "EQ off")
             Text("EQ").font(.callout.weight(.medium))
             AutoEqTransferButton(settings: settings) { transferMessage = $0 }
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
             Button("Flatten") {
                 for index in settings.wrappedValue.eq.bands.indices {
                     settings.wrappedValue.eq.bands[index].gainDB = 0
                 }
             }
-            .disabled(settings.wrappedValue.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .disabled(!settings.wrappedValue.eq.isEnabled
+                      || settings.wrappedValue.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+            // Everything EQ-related greys with it — except the power toggle
+            // itself, which has to stay live to switch it back on.
             Toggle("Match", isOn: settings.loudnessMatch)
                 .toggleStyle(.button)
                 .controlSize(.small)
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
                 .help("Compensate the EQ's average level change, so switching it "
                       + "off does not also change loudness.")
             Toggle("Adapt. Q", isOn: settings.eq.adaptiveQ)
                 .toggleStyle(.button)
                 .controlSize(.small)
+                .disabled(!settings.wrappedValue.eq.isEnabled)
+                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
 
             Spacer()
 
