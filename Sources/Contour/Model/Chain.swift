@@ -43,6 +43,9 @@ enum Chain: Int, CaseIterable, Identifiable, Sendable {
 /// the audio thread through `TripleBuffer`, so it must stay `BitwiseCopyable`.
 struct ChainParameters: Equatable, BitwiseCopyable {
     var isActive: Bool = true
+    /// Applied after the EQ, and only while it is enabled, so bypassing the EQ
+    /// does not change loudness.
+    var eqMakeup: Float = 1
     /// Linear, not dB. Applied before the processing list; the EQ's
     /// "compensate for max boost" action will drive this in step 3.
     var inputTrim: Float = 1
@@ -110,6 +113,10 @@ struct ChainSettings: Codable, Equatable, Sendable {
     /// pulls the trim down and lowering it lets the trim back up. The manual
     /// `inputTrimDB` is kept untouched so turning auto off restores it.
     var autoTrim: Bool = false
+    /// Compensates the EQ's average level change so switching it off does not
+    /// also change loudness. Peak-based trim cannot do this: a curve of cuts has
+    /// no peak boost and still gets quieter.
+    var loudnessMatch: Bool = false
     var eq = EQSettings()
     /// Ordered: everything before the EQ entry runs first, everything after it
     /// runs last. Always contains exactly one `.eq`.
@@ -120,7 +127,7 @@ struct ChainSettings: Codable, Equatable, Sendable {
 
     /// Decoding tolerates settings saved before the EQ existed.
     enum CodingKeys: String, CodingKey {
-        case outputGainDB, inputTrimDB, autoTrim, eq, processing
+        case outputGainDB, inputTrimDB, autoTrim, loudnessMatch, eq, processing
     }
 
     init() {}
@@ -130,6 +137,7 @@ struct ChainSettings: Codable, Equatable, Sendable {
         outputGainDB = try container.decodeIfPresent(Float.self, forKey: .outputGainDB) ?? 0
         inputTrimDB = try container.decodeIfPresent(Float.self, forKey: .inputTrimDB) ?? 0
         autoTrim = try container.decodeIfPresent(Bool.self, forKey: .autoTrim) ?? false
+        loudnessMatch = try container.decodeIfPresent(Bool.self, forKey: .loudnessMatch) ?? false
         eq = try container.decodeIfPresent(EQSettings.self, forKey: .eq) ?? EQSettings()
         processing = try container.decodeIfPresent([ProcessingItem].self, forKey: .processing)
             ?? [ProcessingItem(kind: .eq)]

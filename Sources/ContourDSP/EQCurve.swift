@@ -86,6 +86,44 @@ public final class EQCurveCache {
         return peak
     }
 
+    /// Average power gain of the whole curve, in dB.
+    ///
+    /// This is what a bypass comparison needs, and it is a different number from
+    /// `maximumBoostDB`: peak boost protects the converter from clipping, while
+    /// this keeps the two sides of an A/B at the same loudness. A curve made
+    /// mostly of cuts has almost no peak boost and still audibly loses level.
+    ///
+    /// Averaged over a log-frequency grid, which weights each octave equally —
+    /// close enough to pink noise, and much closer to how programme material is
+    /// distributed than a linear average would be.
+    public static func averageGainDB(bands: [EQBand],
+                                     adaptiveQ: Bool,
+                                     sampleRate: Double,
+                                     pointCount: Int = 128) -> Double {
+        guard sampleRate > 0, !bands.isEmpty else { return 0 }
+        let coefficients = bands.map {
+            EQDesign.coefficients(for: $0, sampleRate: sampleRate, adaptiveQ: adaptiveQ)
+        }
+        let logLow = log10(20.0)
+        let logHigh = log10(min(20_000.0, sampleRate / 2 * 0.99))
+
+        var totalPower = 0.0
+        for index in 0..<pointCount {
+            let t = Double(index) / Double(pointCount - 1)
+            let frequency = pow(10, logLow + t * (logHigh - logLow))
+            let normalized = frequency / sampleRate
+            var magnitude = 1.0
+            for section in coefficients {
+                magnitude *= section.magnitude(atNormalizedFrequency: normalized)
+            }
+            guard magnitude.isFinite else { continue }
+            totalPower += magnitude * magnitude
+        }
+        let mean = totalPower / Double(pointCount)
+        guard mean > 0 else { return 0 }
+        return 10 * log10(mean)
+    }
+
     private func recompute(_ index: Int, band: EQBand, adaptiveQ: Bool) {
         let coefficients = EQDesign.coefficients(for: band,
                                                  sampleRate: sampleRate,

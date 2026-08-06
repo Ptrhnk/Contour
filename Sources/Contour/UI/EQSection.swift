@@ -15,7 +15,6 @@ struct EQSection: View {
     @State private var selectedBand = 2
 
     @State private var transferMessage: String?
-    @State private var showingTransfer = false
 
     /// All three the same width, so the middle knob's centre *is* the group's
     /// centre. With 60/52/48 the group centred correctly but Gain sat about six
@@ -85,45 +84,21 @@ struct EQSection: View {
             .controlSize(.small)
             .disabled(settings.eq.bands.allSatisfy { $0.gainDB == 0 })
             .help("Set every band's gain to 0 dB. Frequencies and Q are kept.")
-            // An ordinary button rather than a Menu. A menu label carries its
-            // own intrinsic metrics that no font or frame reliably overrides, so
-            // the glyph kept sitting high against the controls beside it; a
-            // button in the same style as Flatten matches its height for free.
-            Button {
-                showingTransfer = true
-            } label: {
-                HStack(spacing: 1) {
-                    // Nudged up: the glyph's tray sits at its base, so its
-                    // optical centre is below its geometric one.
-                    Image(systemName: "square.and.arrow.down")
-                        .offset(y: -1)
-                    // Says "this opens something" rather than "this does
-                    // something", which is the whole difference from Flatten.
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7, weight: .semibold))
-                }
-                .frame(height: 18)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Import or export the curve as AutoEq ParametricEQ.txt. "
-                  + "You can also drop a file or text onto the curve.")
-            .popover(isPresented: $showingTransfer, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 4) {
-                    transferButton("Paste AutoEq Text") { importFromClipboard() }
-                    transferButton("Open AutoEq File…") { importFromFile() }
-                    Divider()
-                    transferButton("Copy as AutoEq Text") { exportToClipboard() }
-                    transferButton("Save AutoEq File…") { exportToFile() }
-                }
-                .padding(10)
-                .frame(width: 180)
-            }
+            AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
 
             // A divider, because what follows is state rather than an action.
             // Filled means "currently on", which Flatten can never be.
             Divider().frame(height: 12)
+
+            Toggle("Match", isOn: $settings.loudnessMatch)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Compensate the EQ's average level change, so switching it "
+                      + "off does not also change loudness. "
+                      + (settings.loudnessMatch
+                         ? String(format: "Currently %+.1f dB.", matchDB) : "")
+                      + " Peak trim cannot do this: a curve of cuts has no peak "
+                      + "boost and still gets quieter.")
 
             Toggle("Adapt. Q", isOn: $settings.eq.adaptiveQ)
                 .toggleStyle(.button)
@@ -250,97 +225,25 @@ struct EQSection: View {
             .frame(width: width)
     }
 
-    private func transferButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button {
-            showingTransfer = false
-            action()
-        } label: {
-            Text(title)
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - AutoEq text
-
-    /// The curve alone, in the one format that transfers between machines.
-    /// A Contour preset carries opaque plugin state and does not (§6a).
-    private func apply(_ text: String) {
-        do {
-            let imported = try AutoEqPreset.parse(text)
-            settings.eq.bands = AutoEqPreset.bands(from: imported)
-            settings.eq.isEnabled = true
-            // The file states its own preamp, so auto-trim would fight it.
-            settings.autoTrim = false
-            settings.inputTrimDB = Float(min(max(imported.preampDB,
-                                                 Double(ChainSettings.trimRange.lowerBound)), 0))
-            transferMessage = imported.warnings.isEmpty
-                ? "Imported \(imported.bands.count) filters, preamp "
-                    + String(format: "%.1f dB.", imported.preampDB)
-                : imported.warnings.joined(separator: " ")
-        } catch {
-            transferMessage = error.localizedDescription
-        }
-    }
-
-    private func importFromClipboard() {
-        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
-            transferMessage = "The clipboard has no text."
-            return
-        }
-        apply(text)
-    }
-
-    private func importFromFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .text]
-        panel.allowsOtherFileTypes = true
-        panel.canChooseDirectories = false
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK, let url = panel.url,
-              let text = try? String(contentsOf: url, encoding: .utf8)
-        else { return }
-        apply(text)
-    }
-
-    private var exportText: String {
-        AutoEqPreset.export(bands: settings.eq.bands, preampDB: Double(settings.inputTrimDB))
-    }
-
-    private func exportToClipboard() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(exportText, forType: .string)
-        transferMessage = "Copied the curve as AutoEq text."
-    }
-
-    private func exportToFile() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = "ParametricEQ.txt"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try exportText.write(to: url, atomically: true, encoding: .utf8)
-            transferMessage = "Saved."
-        } catch {
-            transferMessage = error.localizedDescription
-        }
-    }
-
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
 
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-                Task { @MainActor in apply(text) }
+                Task { @MainActor in
+                    AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+                        .apply(text)
+                }
             }
             return true
         }
         _ = provider.loadObject(ofClass: NSString.self) { text, _ in
             guard let text = text as? String else { return }
-            Task { @MainActor in apply(text) }
+            Task { @MainActor in
+                AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+                    .apply(text)
+            }
         }
         return true
     }
@@ -348,6 +251,12 @@ struct EQSection: View {
     // MARK: - Trim
 
     /// Shown value: the derived one when auto is on, the manual one otherwise.
+    private var matchDB: Double {
+        -EQCurveCache.averageGainDB(bands: settings.eq.bands,
+                                    adaptiveQ: settings.eq.adaptiveQ,
+                                    sampleRate: sampleRate)
+    }
+
     /// Independent of the EQ's on/off state, so toggling the EQ does not change
     /// the level and spoil the comparison.
     private var shownTrimDB: Float {

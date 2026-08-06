@@ -196,6 +196,8 @@ final class AudioEngine {
     private let trimRampB = GainRamp()
     private let gainRampA = GainRamp()
     private let gainRampB = GainRamp()
+    private let makeupRampA = GainRamp()
+    private let makeupRampB = GainRamp()
 
     let presets = PresetStore()
     let catalog = AudioUnitCatalog()
@@ -649,12 +651,26 @@ final class AudioEngine {
         return Float(max(min(-boost, 0), Double(ChainSettings.trimRange.lowerBound)))
     }
 
+    /// Undoes the EQ's average level change, so switching the EQ off does not
+    /// also change loudness and hand the comparison to whichever side is louder
+    /// (§3.3). Zero when the EQ is off, because then there is nothing to undo.
+    func loudnessMatchDB(for chain: Chain) -> Float {
+        let settings = settings(for: chain)
+        guard settings.loudnessMatch, settings.eq.isEnabled else { return 0 }
+        let average = EQCurveCache.averageGainDB(bands: settings.eq.bands,
+                                                 adaptiveQ: settings.eq.adaptiveQ,
+                                                 sampleRate: eqSampleRate)
+        return Float(-average)
+    }
+
     private func publishParameters() {
         parameters.publish(EngineParameters(
             a: ChainParameters(isActive: isChainActive(.a),
+                               eqMakeup: Decibels.toLinear(loudnessMatchDB(for: .a)),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .a)),
                                outputGain: Decibels.toLinear(chainA.outputGainDB)),
             b: ChainParameters(isActive: isChainActive(.b),
+                               eqMakeup: Decibels.toLinear(loudnessMatchDB(for: .b)),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .b)),
                                outputGain: Decibels.toLinear(chainB.outputGainDB))))
     }
@@ -680,6 +696,8 @@ final class AudioEngine {
         let trimRampB = self.trimRampB
         let gainRampA = self.gainRampA
         let gainRampB = self.gainRampB
+        let makeupRampA = self.makeupRampA
+        let makeupRampB = self.makeupRampB
         return { buffers in
             let values = parameters.current()
             let frames = buffers.frameCount
@@ -692,6 +710,9 @@ final class AudioEngine {
                                 left: buffers.chainAL, right: buffers.chainAR, frames: frames)
                 eqA.process(left: buffers.chainAL, right: buffers.chainAR,
                              frames: frames, timestamp: buffers.timestamp)
+                makeupRampA.apply(target: values.a.eqMakeup,
+                                  left: buffers.chainAL, right: buffers.chainAR,
+                                  frames: frames)
                 gainRampA.apply(target: values.a.outputGain,
                                 left: buffers.chainAL, right: buffers.chainAR, frames: frames)
             }
@@ -702,6 +723,9 @@ final class AudioEngine {
                                 left: buffers.chainBL, right: buffers.chainBR, frames: frames)
                 eqB.process(left: buffers.chainBL, right: buffers.chainBR,
                              frames: frames, timestamp: buffers.timestamp)
+                makeupRampB.apply(target: values.b.eqMakeup,
+                                  left: buffers.chainBL, right: buffers.chainBR,
+                                  frames: frames)
                 gainRampB.apply(target: values.b.outputGain,
                                 left: buffers.chainBL, right: buffers.chainBR, frames: frames)
             }

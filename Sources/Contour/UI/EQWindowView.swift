@@ -13,6 +13,7 @@ struct EQWindowView: View {
     @State private var chain: Chain = .a
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
+    @State private var transferMessage: String?
 
     static let id = "eq-editor"
     static let windowTitle = "Contour EQ"
@@ -50,6 +51,15 @@ struct EQWindowView: View {
     var body: some View {
         VStack(spacing: 12) {
             toolbar
+
+            ProcessingListView(engine: engine, chain: shownChain)
+
+            if let transferMessage {
+                Text(transferMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             EQCurveView(settings: settings.eq,
                         selectedBand: $selectedBand,
@@ -104,13 +114,21 @@ struct EQWindowView: View {
             PowerToggle(isOn: settings.eq.isEnabled, diameter: 20)
                 .help(settings.wrappedValue.eq.isEnabled ? "EQ on" : "EQ off")
             Text("EQ").font(.callout.weight(.medium))
+            AutoEqTransferButton(settings: settings) { transferMessage = $0 }
             Button("Flatten") {
                 for index in settings.wrappedValue.eq.bands.indices {
                     settings.wrappedValue.eq.bands[index].gainDB = 0
                 }
             }
             .disabled(settings.wrappedValue.eq.bands.allSatisfy { $0.gainDB == 0 })
-            Toggle("Adapt. Q", isOn: settings.eq.adaptiveQ).toggleStyle(.checkbox)
+            Toggle("Match", isOn: settings.loudnessMatch)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Compensate the EQ's average level change, so switching it "
+                      + "off does not also change loudness.")
+            Toggle("Adapt. Q", isOn: settings.eq.adaptiveQ)
+                .toggleStyle(.button)
+                .controlSize(.small)
 
             Spacer()
 

@@ -479,8 +479,9 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v0.6.0 — build-order steps 1–4 and 6 done. Step 5 (AU
-hosting) and step 7 (tap backend) not started.**
+**Current state: v0.7.0 on `au-hosting` — build-order steps 1–6 done. Step 7
+(the process-tap backend) not started.** `main` sits at v0.6.0, the EQ-only
+release.
 
 Version lives in `Resources/Info.plist` as `CFBundleShortVersionString` and is
 shown beside the name in the popover. Tagged releases mark states worth
@@ -505,8 +506,11 @@ and Freq/Gain/Q knobs, presets (shared library, per-chain selection), peak-hold
 meters with a never-falling maximum, a large resizable EQ window, launch at
 login with crash restart, and device-aware chain naming.
 
-Not there yet: AU plugins, tap backend, AutoEq text import, global hotkey,
-scroll-wheel-for-Q, 31-band mode, spectrum analyser.
+Also on `au-hosting`: AU plugin hosting with a reorderable processing list,
+AutoEq text import and export, undo/redo, loudness-matched EQ bypass.
+
+Not there yet: the tap backend, a global hotkey, scroll-wheel-for-Q, 31-band
+mode, spectrum analyser.
 
 Measured with the popover closed: **1.7% of one core**, ~80 MB RSS.
 
