@@ -97,7 +97,13 @@ struct PopoverView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            // The dot is the whole status readout. It used to be paired with the
+            // word for the same value at the other end of the row, which read as
+            // two indicators rather than one thing said twice — and for the
+            // states that need explaining, the Notice below carries the reason,
+            // which "Error" never did.
             Circle().fill(statusColor).frame(width: 8, height: 8)
+                .help(statusText)
             Text("Contour").font(.headline)
             Text(Bundle.main.shortVersion)
                 .font(.caption2.monospacedDigit())
@@ -111,7 +117,6 @@ struct PopoverView: View {
             }
             .buttonStyle(.plain)
             .help("Open the large EQ editor, or bring it to the front")
-            Text(statusText).font(.caption).foregroundStyle(.secondary)
         }
     }
 
