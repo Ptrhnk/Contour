@@ -227,7 +227,11 @@ struct EQWindowView: View {
                             .foregroundStyle(item.isEnabled ? .primary : .secondary)
                     }
                     .buttonStyle(.plain)
-                    .help(item.isEnabled ? item.type.title : "\(item.type.title) (off)")
+                    // Same gesture the popover's strip has had all along.
+                    .onRightClick { settings.wrappedValue.eq.bands[index].isEnabled.toggle() }
+                    .help(item.isEnabled
+                          ? "\(item.type.title) — right-click to disable"
+                          : "\(item.type.title) (off) — right-click to enable")
                 }
             }
 
