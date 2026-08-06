@@ -92,10 +92,12 @@ true`.
 **Backend A — process tap (preferred, build last).** `CATapDescription` with
 `initStereoGlobalTapButExcludeProcesses([own PID])` — excluding our own PID is
 mandatory or the render feeds back into itself — `muteBehavior = .muted`,
-`privateTap = true`. Aggregate with the interface as main sub-device,
-`kAudioAggregateDeviceTapListKey` referencing the tap UUID, and
-`kAudioAggregateDeviceTapAutoStartKey: true`. Needs macOS 14.4+ and the TCC
-grant.
+`privateTap = true`. Aggregate with the interface as main sub-device and
+`kAudioAggregateDeviceTapListKey` referencing the tap UUID. Needs macOS 14.2+
+and the audio-capture TCC grant.
+
+The spec called for `kAudioAggregateDeviceTapAutoStartKey: true`; it must be
+**false** — see below.
 
 Both end at the same place: one `AudioDeviceCreateIOProcIDWithBlock` on the
 aggregate, 2 channels in, 4 out. One callback, one clock domain.
@@ -123,6 +125,96 @@ memset away.
 
 Streams are verified 32-bit float at aggregate creation and creation fails
 otherwise, so the render path can assume `Float`.
+
+### The tap backend: what was measured before writing any of it
+
+**A stuck system-wide mute cannot happen.** The spec calls that the worst
+possible failure, and it is why this step was left last. Measured, with a tone
+playing and a process holding a *running* muted global tap, killed with SIGKILL
+and no teardown at all:
+
+```
+baseline              peak 0.6103
+tap running + muted   peak 0.0000     the mute really does silence the original path
+after kill -9         peak 0.6103     audio came back by itself
+live taps             []              nothing leaked
+```
+
+**`kAudioAggregateDeviceTapAutoStartKey` must be 0.** This one cost the most.
+With it set to 1 the tap runs itself and the client IOProc is *never called* —
+measured at exactly 0 callbacks, against 375 in 4 s (93.75/s at 512 frames)
+with it off. Nothing fails: `AudioHardwareCreateAggregateDevice`,
+`AudioDeviceCreateIOProcIDWithBlock` and `AudioDeviceStart` all return `noErr`
+and the device simply never calls back.
+
+Worse, it is not even consistent. The first probe ran while the BlackHole
+backend already had the interface open, and *every* variant got callbacks —
+auto-start only starves the IOProc when nothing else is already running the
+device. Reproducing it meant quitting the app first. Auto-start exists to hold
+a tap open with no client; Contour is the client.
+
+**A tap only mutes while it is running**, but "running" starts at *creation*,
+not at `AudioDeviceStart`: `HALS_Client::AddMuter … muted by Contour` appears in
+the `coreaudiod` log the moment `AudioHardwareCreateProcessTap` returns. So a
+tap that is created but never rendered gives silence, not passthrough — which is
+exactly what the auto-start bug produced.
+
+**`CATapDescription` wants audio process objects, not Unix PIDs.** Passing
+`getpid()` fails with `kAudioHardwareBadObjectError` ('!obj') and logs
+"can't find specified process object", which reads like a permissions problem
+and is not. Translate with `kAudioHardwarePropertyTranslatePIDToProcessObject`.
+
+**Swift sees the refined ObjC names**: `CATapDescription(__stereoGlobalTapButExcludeProcesses:)`,
+and the mute enum does not import — use `CATapMuteBehavior(rawValue: 1)` for
+`CATapMuted`.
+
+**The aggregate takes only the interface as a sub-device**, with the tap in
+`kAudioAggregateDeviceTapListKey` and `kAudioAggregateDeviceTapAutoStartKey`.
+No BlackHole anywhere. Input streams come back as `[interface inputs, tap]`, so
+the tap is *not* buffer zero — derive its index rather than assuming, exactly as
+for the BlackHole backend.
+
+`kAudioHardwarePropertyTapList` enumerates live taps, which is the recovery path
+if one ever is leaked.
+
+**A stereo tap is a mixdown of the system output device's whole bus**, and it
+costs exactly 6 dB on a 4-output interface. The mixdown averages the pairs that
+fold into each side — `L = 0.5·(ch1 + ch3)` — and ordinary stereo content lives
+only on 1/2, so half the sum is silence. BlackHole is 2 channels and never
+showed it. Measured, 250 Hz at −6.02 dBFS, median block peak:
+
+```
+system output 2 ch (BlackHole)    -6.02 dBFS   unity
+system output 4 ch (SSL 2+)      -12.04 dBFS   exactly 0.5
+```
+
+`TapSource.captureGain(systemOutputChannels:)` inverts it at the deinterleave,
+ahead of the meters, so the Input reading means much the same thing on both
+backends — without which the Tap/BlackHole A/B the switch exists for is
+worthless. The divisor is the pair count, verified at 1 and 2 and **clamped to
+2** rather than extrapolated: an 8-channel device might want 4, and guessing
+upward means a sudden +12 dB into headphones. The compensation follows the
+*system output* device, so a change of its channel count restarts the engine.
+
+`headroomDB` holds it 1 dB below the exact inverse, so restoring the loss does
+not put material mastered near 0 dBFS onto the converter's ceiling with the EQ
+still to come. That is a preference, not a measurement, and it costs exactly
+that much of the level match — applied only where there is a mixdown to undo,
+since a 2-channel system output loses nothing and pulling it down would
+attenuate a capture that was already unity.
+
+**Measuring anything about the tap has two traps.** A player stays bound to
+whatever device it opened, so the system output must be set *before* it starts
+— two attempts here read `-inf` for BlackHole and made the tap look
+level-accurate. And mean level is useless: a device's first buffers hold stale
+memory far above full scale, and one such block moves an average by several dB.
+Median over blocks is stable to a hundredth.
+
+**Two aggregates cannot share a UID.** Creating a second one with
+`com.nahak.contour.aggregate` while the first is alive fails with `'nope'`
+(`kAudioHardwareIllegalOperationError`), so a backend switch must tear the old
+one down before building the new one — which it does, since `start()` calls
+`stop()` first.
 
 ### Hosting plugins: what cannot be worked around
 
@@ -507,13 +599,15 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v0.8.0 on `au-hosting` — build-order steps 1–6 done. Step 7
-(the process-tap backend) not started.** `main` sits at v0.6.0, the EQ-only
-release.
+**Current state: v1.1.0 on `main` — build-order steps 1–7 all done.** Every
+part of the spec's v1 is in, the tap backend included. Tags run
+`v0.6.0` → `v0.8.0` → `v1.1.0`; there is no v1.0.0, which was discussed and
+never cut.
 
-Not 1.0 yet, deliberately: the spec's v1 includes the tap backend, and plugin
-hosting has only just stopped freezing. Version 1 wants step 7 done and the
-plugin path to have survived real use.
+Both backends are live and switchable at runtime from the popover's Capture
+row. The tap is the default where macOS supports it; if it fails to start,
+the engine falls back to BlackHole and says why, without persisting the
+downgrade — so fixing the permission and relaunching just works.
 
 Version lives in `Resources/Info.plist` as `CFBundleShortVersionString` and is
 shown beside the name in the popover. Tagged releases mark states worth
@@ -538,11 +632,16 @@ and Freq/Gain/Q knobs, presets (shared library, per-chain selection), peak-hold
 meters with a never-falling maximum, a large resizable EQ window, launch at
 login with crash restart, and device-aware chain naming.
 
-Also on `au-hosting`: AU plugin hosting with a reorderable processing list,
-AutoEq text import and export, undo/redo, loudness-matched EQ bypass.
+Also: AU plugin hosting with a reorderable processing list, AutoEq text import
+and export, undo/redo, loudness-matched EQ bypass.
 
-Not there yet: the tap backend, a global hotkey, scroll-wheel-for-Q, 31-band
-mode, spectrum analyser.
+And the process-tap backend, with the shared realtime machinery (channel
+mapping, startup gate, metering) factored into `AggregateRenderer` so both
+backends run identical code below the capture point, level-matched to within
+the deliberate 1 dB of headroom.
+
+Not there yet: a global hotkey, scroll-wheel-for-Q, 31-band mode, spectrum
+analyser.
 
 Measured with the popover closed: **1.7% of one core**, ~80 MB RSS.
 

@@ -25,7 +25,7 @@ final class AggregateDevice {
 
     let id: AudioObjectID
     let interface: AudioDevice
-    let capture: AudioDevice
+    let capture: AudioDevice?
     let inputStreams: [Int]
     let outputStreams: [Int]
 
@@ -33,7 +33,7 @@ final class AggregateDevice {
 
     private init(id: AudioObjectID,
                  interface: AudioDevice,
-                 capture: AudioDevice,
+                 capture: AudioDevice?,
                  inputStreams: [Int],
                  outputStreams: [Int]) {
         self.id = id
@@ -43,9 +43,40 @@ final class AggregateDevice {
         self.outputStreams = outputStreams
     }
 
-    /// The interface goes first in the sub-device list so its outputs occupy
-    /// logical channels 0..n-1, and it is the clock master. Drift compensation
-    /// runs on the capture device, never on the master.
+    /// Tap flavour: the interface is the only sub-device, and system audio
+    /// arrives through the tap rather than a virtual capture device. No
+    /// BlackHole involved.
+    @available(macOS 14.2, *)
+    static func create(interface: AudioDevice, tap: ProcessTap) throws -> AggregateDevice {
+        let description: [String: Any] = [
+            kAudioAggregateDeviceNameKey as String: "Contour",
+            kAudioAggregateDeviceUIDKey as String: uid,
+            kAudioAggregateDeviceIsPrivateKey as String: 1,
+            kAudioAggregateDeviceIsStackedKey as String: 0,
+            kAudioAggregateDeviceMainSubDeviceKey as String: interface.uid,
+            kAudioAggregateDeviceSubDeviceListKey as String: [
+                [kAudioSubDeviceUIDKey as String: interface.uid,
+                 kAudioSubDeviceDriftCompensationKey as String: 0],
+            ],
+            // Explicitly off. With auto-start on, the tap runs itself and our
+            // IOProc is never called at all — measured as exactly 0 callbacks
+            // while auto-start off gives the full 93.75/s at 512 frames. It only
+            // appeared to work when something else already had the interface
+            // running, which is what made it look like an intermittent fault.
+            // Auto-start is for holding a tap open with no client; Contour is
+            // the client.
+            kAudioAggregateDeviceTapAutoStartKey as String: 0,
+            kAudioAggregateDeviceTapListKey as String: [
+                [kAudioSubTapUIDKey as String: tap.uuid,
+                 kAudioSubTapDriftCompensationKey as String: 1],
+            ],
+        ]
+        return try create(description: description, interface: interface, capture: nil)
+    }
+
+    /// BlackHole flavour. The interface goes first in the sub-device list so its
+    /// outputs occupy logical channels 0..n-1, and it is the clock master. Drift
+    /// compensation runs on the capture device, never on the master.
     static func create(interface: AudioDevice, capture: AudioDevice) throws -> AggregateDevice {
         let description: [String: Any] = [
             kAudioAggregateDeviceNameKey as String: "Contour",
@@ -61,6 +92,12 @@ final class AggregateDevice {
             ],
         ]
 
+        return try create(description: description, interface: interface, capture: capture)
+    }
+
+    private static func create(description: [String: Any],
+                               interface: AudioDevice,
+                               capture: AudioDevice?) throws -> AggregateDevice {
         var id: AudioObjectID = 0
         try CA.check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &id),
                      "create aggregate device")
@@ -145,7 +182,8 @@ final class AggregateDevice {
         return ChannelPairSlot(buffer: left.buffer, leftOffset: left.offset, stride: left.stride)
     }
 
-    /// The capture device's channels start after every interface channel.
+    /// Whatever supplies system audio — the capture device or the tap — comes
+    /// after every input the interface itself has, in both flavours.
     var captureInputPair: ChannelPairSlot? {
         Self.pairSlot(startingAt: interface.inputChannels, in: inputStreams)
     }

@@ -81,8 +81,12 @@ final class AudioEngine {
     /// so Contour surfaces it instead.
     private(set) var interfaceVolume: Float?
 
-    private(set) var meters = BlackHoleSource.Meters()
+    private(set) var meters = AggregateRenderer.Meters()
     private(set) var levels = DisplayLevels()
+
+    /// Why the tap backend was dropped, when it was. Cleared on a start that
+    /// does not need the fallback.
+    private(set) var tapFailure: String?
 
     /// Reading BlackHole means reading an *input* device, which macOS gates behind
     /// the microphone TCC grant. Without it Core Audio hands back silence and no
@@ -93,6 +97,16 @@ final class AudioEngine {
     static let log = Logger(subsystem: "com.nahak.contour", category: "engine")
 
     // MARK: - User-facing settings
+
+    /// Changing this rebuilds the whole device path, so it goes through the same
+    /// coalesced restart an interface change does.
+    var backend: Backend = .default {
+        didSet {
+            guard !isLoading, backend != oldValue else { return }
+            defaults.set(backend.rawValue, forKey: Keys.backend)
+            restart()
+        }
+    }
 
     var destination: Destination = .both {
         didSet {
@@ -166,6 +180,7 @@ final class AudioEngine {
 
     private enum Keys {
         static let interfaceUID = "interfaceUID"
+        static let backend = "backend"
         static let destination = "destination"
         static let chainA = "chainA"
         static let chainB = "chainB"
@@ -185,9 +200,9 @@ final class AudioEngine {
 
     /// One cascade per chain, allocated once and kept for the process lifetime
     /// so the realtime path never waits on a filter being built.
-    private let eqA = ChainEQ(maximumFrames: BlackHoleSource.scratchCapacity,
+    private let eqA = ChainEQ(maximumFrames: AggregateRenderer.scratchCapacity,
                               sampleRate: 44_100)
-    private let eqB = ChainEQ(maximumFrames: BlackHoleSource.scratchCapacity,
+    private let eqB = ChainEQ(maximumFrames: AggregateRenderer.scratchCapacity,
                               sampleRate: 44_100)
 
     // Gain and trim are ramped rather than applied as a step, so loading a
@@ -215,7 +230,7 @@ final class AudioEngine {
 
     func eq(for chain: Chain) -> ChainEQ { chain == .a ? eqA : eqB }
 
-    private var source: BlackHoleSource?
+    private var source: (any AudioSource)?
     private var listeners: [PropertyListener] = []
     private var interfaceListeners: [PropertyListener] = []
     private var restartTask: Task<Void, Never>?
@@ -224,6 +239,8 @@ final class AudioEngine {
 
     init() {
         interfaceUID = defaults.string(forKey: Keys.interfaceUID)
+        let savedBackend = defaults.string(forKey: Keys.backend).flatMap(Backend.init(rawValue:))
+        backend = savedBackend.map { $0.isSupported ? $0 : .default } ?? .default
         destination = defaults.string(forKey: Keys.destination)
             .flatMap(Destination.init(rawValue:)) ?? .both
         chainA = load(Keys.chainA) ?? ChainSettings()
@@ -343,11 +360,12 @@ final class AudioEngine {
         stop()
         refreshEnvironment()
 
+        // Both backends read an *input* stream — BlackHole's loopback or the
+        // tap's — and macOS gates every input behind the microphone grant.
         microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio)
         switch microphoneAccess {
         case .notDetermined:
-            setStatus(.waiting("Contour needs microphone access to read system audio "
-                               + "back from BlackHole."))
+            setStatus(.waiting("Contour needs microphone access to read system audio."))
             requestMicrophoneAccess()
             return
         case .denied, .restricted:
@@ -360,10 +378,6 @@ final class AudioEngine {
             break
         }
 
-        guard let capture else {
-            setStatus(.waiting("BlackHole 2ch not found. Install it, then reopen this menu."))
-            return
-        }
         guard let interface else {
             setStatus(.waiting("No output interface found."))
             return
@@ -374,10 +388,31 @@ final class AudioEngine {
         }
 
         let pairCount = interface.outputChannels / 2
-        let source = BlackHoleSource(interface: interface,
+        let chainBPairIndex = pairCount >= 2 ? 1 : nil
+        let source: any AudioSource
+
+        switch backend {
+        case .tap:
+            // A fresh attempt at the tap clears whatever the last one said.
+            tapFailure = nil
+            guard #available(macOS 14.2, *) else {
+                setStatus(.failed("The tap backend needs macOS 14.2 or later."))
+                return
+            }
+            source = TapSource(interface: interface,
+                               chainAPairIndex: 0,
+                               chainBPairIndex: chainBPairIndex)
+        case .blackHole:
+            guard let capture else {
+                setStatus(.waiting("BlackHole 2ch not found. Install it, then reopen this menu."))
+                return
+            }
+            source = BlackHoleSource(interface: interface,
                                      capture: capture,
                                      chainAPairIndex: 0,
-                                     chainBPairIndex: pairCount >= 2 ? 1 : nil)
+                                     chainBPairIndex: chainBPairIndex)
+        }
+
         publishParameters()
         do {
             try source.start(makeRenderBlock())
@@ -401,6 +436,22 @@ final class AudioEngine {
                 """)
         } catch {
             self.source = nil
+            source.stop()
+            // A tap can fail for reasons the user cannot fix from here — the
+            // permission was never granted, or was revoked. Falling back beats
+            // sitting silent, as long as it says so.
+            if backend == .tap, capture != nil {
+                let reason = "\(error)"
+                Self.log.error("tap backend failed, falling back to BlackHole: \(reason, privacy: .public)")
+                tapFailure = reason
+                // Deliberately not persisted: the saved preference stays on the
+                // tap, so granting the permission and relaunching just works.
+                isLoading = true
+                backend = .blackHole
+                isLoading = false
+                start()
+                return
+            }
             setStatus(.failed("\(error)"))
         }
     }
@@ -424,7 +475,7 @@ final class AudioEngine {
         source = nil
         interfaceListeners.removeAll()
         levels = DisplayLevels()
-        meters = BlackHoleSource.Meters()
+        meters = AggregateRenderer.Meters()
         if status.isRunning { status = .stopped }
     }
 
@@ -443,8 +494,25 @@ final class AudioEngine {
 
     func makeCaptureSystemOutput() {
         guard let capture else { return }
+        setSystemOutput(capture)
+    }
+
+    /// The tap backend does not need BlackHole in the path at all, and leaving
+    /// the system output pointed at it means the volume keys act on a device
+    /// nothing is draining.
+    func makeInterfaceSystemOutput() {
+        guard let interface else { return }
+        setSystemOutput(interface)
+    }
+
+    var systemOutputIsInterface: Bool {
+        guard let systemOutput, let interface else { return false }
+        return systemOutput.uid == interface.uid
+    }
+
+    private func setSystemOutput(_ device: AudioDevice) {
         do {
-            try AudioDevices.setDefaultOutputDevice(capture)
+            try AudioDevices.setDefaultOutputDevice(device)
             refreshEnvironment()
         } catch {
             setStatus(.failed("Could not set system output: \(error)"))
@@ -484,7 +552,7 @@ final class AudioEngine {
         }
 
         let sampleRate = eqSampleRate
-        let frames = BlackHoleSource.scratchCapacity
+        let frames = AggregateRenderer.scratchCapacity
 
         graphBuilds[chain] = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -797,7 +865,7 @@ final class AudioEngine {
                 try? await Task.sleep(for: .milliseconds(idle ? 500 : 50))
                 guard let self else { return }
                 guard let source = self.source else {
-                    self.meters = BlackHoleSource.Meters()
+                    self.meters = AggregateRenderer.Meters()
                     self.levels = DisplayLevels()
                     lastCallbacks = 0
                     continue
@@ -844,7 +912,7 @@ final class AudioEngine {
     private static let holdDuration: Double = 1.5
 
     private static func advance(_ current: DisplayLevels,
-                                with meters: BlackHoleSource.Meters,
+                                with meters: AggregateRenderer.Meters,
                                 interval: Double) -> DisplayLevels {
         var levels = current
         levels.input = advance(current.input, meters.input, interval)
@@ -854,7 +922,7 @@ final class AudioEngine {
     }
 
     private static func advance(_ current: StereoMeter,
-                                _ peaks: BlackHoleSource.StereoPeak,
+                                _ peaks: AggregateRenderer.StereoPeak,
                                 _ interval: Double) -> StereoMeter {
         StereoMeter(left: advance(current.left, peaks.left, interval),
                     right: advance(current.right, peaks.right, interval))
@@ -970,10 +1038,24 @@ final class AudioEngine {
     private func handleHardwareChange() {
         let previousInterfaceUID = interface?.uid
         let previousSampleRate = interface?.sampleRate
+        let previousSystemOutputChannels = systemOutput?.outputChannels
         refreshEnvironment()
 
         switch status {
         case .running:
+            // The tap's mixdown compensation is derived from the system output
+            // device's channel count, so switching from a 4-channel interface to
+            // stereo headphones changes it by 6 dB. Rebuild rather than run on a
+            // gain computed for a device that is no longer there.
+            if backend == .tap, systemOutput?.outputChannels != previousSystemOutputChannels {
+                Self.log.notice("""
+                    system output width changed: \
+                    \(previousSystemOutputChannels ?? -1, privacy: .public) -> \
+                    \(self.systemOutput?.outputChannels ?? -1, privacy: .public) ch — restart
+                    """)
+                restart()
+                return
+            }
             // Interface gone or re-clocked: the aggregate is stale either way.
             if interface?.uid != previousInterfaceUID || interface?.sampleRate != previousSampleRate {
                 Self.log.notice("""
