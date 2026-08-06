@@ -620,10 +620,10 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v1.1.0 on `main` — build-order steps 1–7 all done.** Every
+**Current state: v1.2.0 on `main` — build-order steps 1–7 all done.** Every
 part of the spec's v1 is in, the tap backend included. Tags run
-`v0.6.0` → `v0.8.0` → `v1.1.0`; there is no v1.0.0, which was discussed and
-never cut.
+`v0.6.0` → `v0.8.0` → `v1.1.0` → `v1.2.0`; there is no v1.0.0, which was
+discussed and never cut.
 
 Both backends are live and switchable at runtime from the popover's Capture
 row. The tap is the default where macOS supports it; if it fails to start,
@@ -660,6 +660,10 @@ And the process-tap backend, with the shared realtime machinery (channel
 mapping, startup gate, metering) factored into `AggregateRenderer` so both
 backends run identical code below the capture point, level-matched to within
 the deliberate 1 dB of headroom.
+
+Master bypass on the chain header or the **B** key, right-click on any band
+number to mute it — in both the popover and the window, which is where that
+gesture had been missing.
 
 Not there yet: a global hotkey, scroll-wheel-for-Q, 31-band mode, spectrum
 analyser.
