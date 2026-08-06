@@ -34,7 +34,7 @@ struct EQSection: View {
         VStack(alignment: .leading, spacing: 8) {
             // The curve has no intrinsic height any more, so the popover sets
             // one; the large window lets it fill instead.
-            headerDimmed
+            header
             EQCurveView(settings: $settings.eq,
                         selectedBand: $selectedBand,
                         model: model,
@@ -58,20 +58,16 @@ struct EQSection: View {
         }
     }
 
-    /// The header greys out with the rest of the panel, so "EQ off" is one
-    /// visual state rather than a switched-off body under a live-looking title.
-    private var headerDimmed: some View {
-        header
-            .disabled(!settings.eq.isEnabled)
-            .opacity(settings.eq.isEnabled ? 1 : 0.4)
-    }
-
     private var header: some View {
         HStack(alignment: .center, spacing: 6) {
-            // No power button here: the Processing list above already owns the
-            // EQ's on/off, and two controls for one flag invite the question of
-            // whether they mean different things.
+            // The processing list moved below the EQ, so its copy of this
+            // toggle is now past the panel it controls. This one stays live
+            // while everything else in the header greys, because it is the way
+            // back on.
+            PowerToggle(isOn: $settings.eq.isEnabled, diameter: 18)
+                .help(settings.eq.isEnabled ? "EQ on" : "EQ off")
             Text("EQ").font(.callout.weight(.medium))
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
             Spacer()
             // Gains only. Frequencies, Qs, types and enabled flags survive, so a
             // curve you have shaped can be flattened and rebuilt without losing
@@ -82,17 +78,24 @@ struct EQSection: View {
                 }
             }
             .controlSize(.small)
-            .disabled(settings.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .disabled(!settings.eq.isEnabled
+                      || settings.eq.bands.allSatisfy { $0.gainDB == 0 })
+            .opacity(settings.eq.isEnabled ? 1 : 0.4)
             .help("Set every band's gain to 0 dB. Frequencies and Q are kept.")
             AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
 
             // A divider, because what follows is state rather than an action.
             // Filled means "currently on", which Flatten can never be.
             Divider().frame(height: 12)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
 
             Toggle("Match", isOn: $settings.loudnessMatch)
                 .toggleStyle(.button)
                 .controlSize(.small)
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
                 .help("Compensate the EQ's average level change, so switching it "
                       + "off does not also change loudness. "
                       + (settings.loudnessMatch
@@ -103,6 +106,8 @@ struct EQSection: View {
             Toggle("Adapt. Q", isOn: $settings.eq.adaptiveQ)
                 .toggleStyle(.button)
                 .controlSize(.small)
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
                 .help("Q widens as gain approaches zero. Off by default so imported "
                       + "AutoEq and EQ Eight curves keep their exact Q values.")
         }
@@ -233,6 +238,8 @@ struct EQSection: View {
                 guard let url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
                 Task { @MainActor in
                     AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
                         .apply(text)
                 }
             }
@@ -242,6 +249,8 @@ struct EQSection: View {
             guard let text = text as? String else { return }
             Task { @MainActor in
                 AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
                     .apply(text)
             }
         }
