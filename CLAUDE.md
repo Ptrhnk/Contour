@@ -599,8 +599,10 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v1.1.0 on `tap-backend` — build-order steps 1–7 done.**
-`main` sits at v1.0.0 with the EQ, presets and plugin hosting.
+**Current state: v1.1.0 on `main` — build-order steps 1–7 all done.** Every
+part of the spec's v1 is in, the tap backend included. Tags run
+`v0.6.0` → `v0.8.0` → `v1.1.0`; there is no v1.0.0, which was discussed and
+never cut.
 
 Both backends are live and switchable at runtime from the popover's Capture
 row. The tap is the default where macOS supports it; if it fails to start,
@@ -630,12 +632,13 @@ and Freq/Gain/Q knobs, presets (shared library, per-chain selection), peak-hold
 meters with a never-falling maximum, a large resizable EQ window, launch at
 login with crash restart, and device-aware chain naming.
 
-Also on `au-hosting`: AU plugin hosting with a reorderable processing list,
-AutoEq text import and export, undo/redo, loudness-matched EQ bypass.
+Also: AU plugin hosting with a reorderable processing list, AutoEq text import
+and export, undo/redo, loudness-matched EQ bypass.
 
-Also on `tap-backend`: the process-tap backend, with the shared realtime
-machinery (channel mapping, startup gate, metering) factored into
-`AggregateRenderer` so both backends run identical code below the capture point.
+And the process-tap backend, with the shared realtime machinery (channel
+mapping, startup gate, metering) factored into `AggregateRenderer` so both
+backends run identical code below the capture point, level-matched to within
+the deliberate 1 dB of headroom.
 
 Not there yet: a global hotkey, scroll-wheel-for-Q, 31-band mode, spectrum
 analyser.
