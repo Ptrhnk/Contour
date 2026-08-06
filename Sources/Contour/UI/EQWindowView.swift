@@ -43,6 +43,11 @@ struct EQWindowView: View {
         shownChain == .a ? $engine.chainA : $engine.chainB
     }
 
+    /// The trim in force: derived when auto-trim is on, manual otherwise.
+    private var shownTrimDB: Float {
+        engine.effectiveTrimDB(for: shownChain)
+    }
+
     private var band: Binding<EQBand> {
         Binding(get: { settings.wrappedValue.eq.bands[safe: selectedBand] },
                 set: { settings.wrappedValue.eq.bands[safe: selectedBand] = $0 })
@@ -254,13 +259,21 @@ struct EQWindowView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text("Trim").font(.caption).foregroundStyle(.secondary).frame(width: 32,
-                                                                                 alignment: .leading)
+                    Text("Trim").font(.caption).foregroundStyle(.secondary)
+                        .frame(width: 32, alignment: .leading)
+                    // Shows the trim actually in force. Binding the slider to
+                    // the manual value while auto-trim drives the audio meant
+                    // the window disagreed with both the popover and the sound.
                     Slider(value: Binding(
-                        get: { Double(settings.wrappedValue.inputTrimDB) },
+                        get: { Double(shownTrimDB) },
                         set: { settings.wrappedValue.inputTrimDB = Float($0) }),
                            in: Self.trimRange)
                         .disabled(settings.wrappedValue.autoTrim)
+                    Text(String(format: "%.1f dB", shownTrimDB))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(settings.wrappedValue.autoTrim
+                                         ? Color.accentColor : .primary)
+                        .frame(width: 56, alignment: .trailing)
                     Toggle("Auto", isOn: settings.autoTrim)
                         .toggleStyle(.button)
                         .controlSize(.small)
