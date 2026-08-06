@@ -102,6 +102,25 @@ struct ProcessingListView: View {
                 .help("Remove")
             }
 
+            // Kept alongside dragging: one step is quicker to aim at than a
+            // drag, and dragging is fiddly in a popover this narrow.
+            Button {
+                move(item, by: -1)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.plain)
+            .disabled(items.first?.id == item.id)
+            .help("Move earlier in the chain")
+
+            Button {
+                move(item, by: 1)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.plain)
+            .disabled(items.last?.id == item.id)
+            .help("Move later in the chain")
         }
         .font(.caption)
         .padding(.vertical, 3)
