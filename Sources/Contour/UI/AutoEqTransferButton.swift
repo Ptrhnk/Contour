@@ -61,23 +61,8 @@ struct AutoEqTransferButton: View {
 
     // MARK: - Transfer
 
-    /// Applying a curve also sets the trim from the file's preamp and switches
-    /// auto-trim off, because the file states its own and the two would fight.
-    func apply(_ text: String) {
-        do {
-            let imported = try AutoEqPreset.parse(text)
-            settings.eq.bands = AutoEqPreset.bands(from: imported)
-            settings.eq.isEnabled = true
-            settings.autoTrim = false
-            settings.inputTrimDB = Float(min(max(imported.preampDB,
-                                                 Double(ChainSettings.trimRange.lowerBound)), 0))
-            onMessage(imported.warnings.isEmpty
-                      ? "Imported \(imported.bands.count) filters, preamp "
-                          + String(format: "%.1f dB.", imported.preampDB)
-                      : imported.warnings.joined(separator: " "))
-        } catch {
-            onMessage(error.localizedDescription)
-        }
+    private func apply(_ text: String) {
+        onMessage(AutoEqTransfer.apply(text, to: &settings))
     }
 
     private func importFromClipboard() {
@@ -120,6 +105,34 @@ struct AutoEqTransferButton: View {
             onMessage("Saved.")
         } catch {
             onMessage(error.localizedDescription)
+        }
+    }
+}
+
+
+/// The import itself, separate from the control that offers it, so a drop target
+/// can reuse it without building a view to call a method on.
+enum AutoEqTransfer {
+
+    /// Also sets the trim from the file's preamp and switches auto-trim off:
+    /// the file states its own and the two would fight. Returns what to tell
+    /// the user.
+    @discardableResult
+    static func apply(_ text: String, to settings: inout ChainSettings) -> String {
+        do {
+            let imported = try AutoEqPreset.parse(text)
+            settings.eq.bands = AutoEqPreset.bands(from: imported)
+            settings.eq.isEnabled = true
+            settings.autoTrim = false
+            settings.inputTrimDB = Float(min(max(imported.preampDB,
+                                                 Double(ChainSettings.trimRange.lowerBound)), 0))
+            guard imported.warnings.isEmpty else {
+                return imported.warnings.joined(separator: " ")
+            }
+            return "Imported \(imported.bands.count) filters, preamp "
+                + String(format: "%.1f dB.", imported.preampDB)
+        } catch {
+            return error.localizedDescription
         }
     }
 }

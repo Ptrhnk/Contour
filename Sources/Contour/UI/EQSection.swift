@@ -234,27 +234,25 @@ struct EQSection: View {
         guard let provider = providers.first else { return false }
 
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-                Task { @MainActor in
-                    AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
-                .disabled(!settings.eq.isEnabled)
-                .opacity(settings.eq.isEnabled ? 1 : 0.4)
-                        .apply(text)
-                }
+            // NSURL, not URL: only the former conforms to NSItemProviderReading.
+            _ = provider.loadObject(ofClass: NSURL.self) { item, _ in
+                guard let url = item as? URL,
+                      let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+                Task { @MainActor in importDropped(text) }
             }
             return true
         }
         _ = provider.loadObject(ofClass: NSString.self) { text, _ in
             guard let text = text as? String else { return }
-            Task { @MainActor in
-                AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
-                .disabled(!settings.eq.isEnabled)
-                .opacity(settings.eq.isEnabled ? 1 : 0.4)
-                    .apply(text)
-            }
+            Task { @MainActor in importDropped(text) }
         }
         return true
+    }
+
+    private func importDropped(_ text: String) {
+        var updated = settings
+        transferMessage = AutoEqTransfer.apply(text, to: &updated)
+        settings = updated
     }
 
     // MARK: - Trim
