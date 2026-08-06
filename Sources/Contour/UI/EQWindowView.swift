@@ -10,14 +10,12 @@ import SwiftUI
 struct EQWindowView: View {
     @Bindable var engine: AudioEngine
 
-    /// Floating by default: Contour has no Dock icon and no ⌘-Tab entry, so a
-    /// window that falls behind another app is genuinely hard to retrieve.
-    @AppStorage("eqWindowFloating") private var isFloating = true
     @State private var chain: Chain = .a
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
 
     static let id = "eq-editor"
+    static let windowTitle = "Contour EQ"
 
     private static let trimRange =
         Double(ChainSettings.trimRange.lowerBound)...Double(ChainSettings.trimRange.upperBound)
@@ -64,7 +62,7 @@ struct EQWindowView: View {
         }
         .padding(16)
         .frame(minWidth: 720, minHeight: 520)
-        .background(WindowConfigurator(isFloating: isFloating).frame(width: 0, height: 0))
+        .background(WindowConfigurator().frame(width: 0, height: 0))
         .onAppear { engine.beginObservingMeters() }
         .onDisappear { engine.endObservingMeters() }
     }
@@ -100,7 +98,9 @@ struct EQWindowView: View {
 
             Divider().frame(height: 16)
 
-            Toggle("EQ", isOn: settings.eq.isEnabled).toggleStyle(.checkbox)
+            PowerToggle(isOn: settings.eq.isEnabled, diameter: 20)
+                .help(settings.wrappedValue.eq.isEnabled ? "EQ on" : "EQ off")
+            Text("EQ").font(.callout.weight(.medium))
             Button("Flatten") {
                 for index in settings.wrappedValue.eq.bands.indices {
                     settings.wrappedValue.eq.bands[index].gainDB = 0
@@ -129,12 +129,6 @@ struct EQWindowView: View {
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
 
-            Toggle(isOn: $isFloating) {
-                Image(systemName: isFloating ? "pin.fill" : "pin.slash")
-            }
-            .toggleStyle(.button)
-            .help("Keep this window above other apps. Contour has no Dock icon, "
-                  + "so an unpinned window can be hard to find again.")
         }
     }
 
@@ -165,17 +159,15 @@ struct EQWindowView: View {
                 }
             }
 
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Type").font(.system(size: 10)).foregroundStyle(.secondary)
-                    Picker("", selection: band.type) {
-                        ForEach(EQBandType.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 130)
+            HStack(alignment: .center, spacing: 0) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Band \(selectedBand + 1)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    FilterTypePicker(type: band.type,
+                                     iconSize: CGSize(width: 26, height: 18))
                 }
-
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(alignment: .top, spacing: 22) {
                     knob("Freq", band.frequency, EQBand.frequencyRange, logarithmic: true,
@@ -188,15 +180,9 @@ struct EQWindowView: View {
                          defaultValue: 0.7, width: 60)
                 }
 
-                Spacer(minLength: 0)
-
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text("Band \(selectedBand + 1)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                    Toggle("On", isOn: band.isEnabled).toggleStyle(.checkbox)
-                }
-                .frame(width: 130, alignment: .trailing)
+                PowerToggle(isOn: band.isEnabled, diameter: 34)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(band.wrappedValue.isEnabled ? "Band on" : "Band off")
             }
         }
     }

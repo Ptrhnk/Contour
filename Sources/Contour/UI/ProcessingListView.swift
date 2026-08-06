@@ -67,10 +67,12 @@ struct ProcessingListView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
 
-            Toggle("", isOn: bypassBinding(item))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .help(item.isBypassed ? "Bypassed" : "Active")
+            PowerToggle(isOn: bypassBinding(item), diameter: 16)
+                .help(item.isEQ
+                      ? "EQ on or off"
+                      : (item.isBypassed
+                         ? "Bypassed — no audio passes through it"
+                         : "Active"))
 
             Text(item.title)
                 .font(.caption)

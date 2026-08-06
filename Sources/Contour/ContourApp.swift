@@ -18,7 +18,7 @@ struct ContourApp: App {
 
         // A real window, so it can be centred and resized — the menu-bar panel
         // offers no placement control.
-        Window("Contour EQ", id: EQWindowView.id) {
+        Window(EQWindowView.windowTitle, id: EQWindowView.id) {
             EQWindowView(engine: delegate.engine)
         }
         .defaultSize(width: 900, height: 620)

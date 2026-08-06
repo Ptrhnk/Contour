@@ -55,9 +55,10 @@ struct EQSection: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Toggle("EQ", isOn: $settings.eq.isEnabled)
-                .toggleStyle(.checkbox)
-                .font(.callout.weight(.medium))
+            // No power button here: the Processing list above already owns the
+            // EQ's on/off, and two controls for one flag invite the question of
+            // whether they mean different things.
+            Text("EQ").font(.callout.weight(.medium))
             Spacer()
             // Gains only. Frequencies, Qs, types and enabled flags survive, so a
             // curve you have shaped can be flattened and rebuilt without losing
@@ -116,33 +117,28 @@ struct EQSection: View {
                             .foregroundStyle(item.isEnabled ? .primary : .secondary)
                     }
                     .buttonStyle(.plain)
-                    .help(item.isEnabled ? item.type.title : "\(item.type.title) (off)")
+                    .onRightClick { settings.eq.bands[index].isEnabled.toggle() }
+                    .help(item.isEnabled
+                          ? "\(item.type.title) — right-click to disable"
+                          : "\(item.type.title) (off) — right-click to enable")
                 }
             }
 
-            // Equal-width side columns so the knobs land optically centred
-            // rather than merely "after" the type picker.
-            HStack(alignment: .top, spacing: 8) {
+            // Both sides take whatever is left over, equally, so the knob group
+            // lands on the true centre without anyone having to guess widths.
+            // Fixed side columns plus HStack spacing added up to more than the
+            // popover is wide, which collapsed the spacers and pushed the whole
+            // row off centre.
+            HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Band \(selectedBand + 1)")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
-                    Picker("", selection: band.type) {
-                        ForEach(EQBandType.allCases, id: \.self) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .labelsHidden()
-                    .controlSize(.small)
+                    FilterTypePicker(type: band.type)
                 }
-                .frame(width: 96, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 0)
-
-                // Knobs and the On toggle form one group, centred in the space
-                // left of the type column. Giving On its own fixed column made
-                // its unused width show up as a gutter on the right edge.
-                HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
                     knobColumn(title: "Freq",
                                value: band.frequency,
                                range: EQBand.frequencyRange,
@@ -165,14 +161,14 @@ struct EQSection: View {
                                logarithmic: true,
                                defaultValue: 0.7,
                                fieldWidth: 48)
-
-                    Toggle("On", isOn: band.isEnabled)
-                        .toggleStyle(.checkbox)
-                        .font(.caption)
-                        .padding(.top, 12)
                 }
 
-                Spacer(minLength: 0)
+                PowerToggle(isOn: band.isEnabled, diameter: 26)
+                    .padding(.top, 14)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(band.wrappedValue.isEnabled
+                          ? "Band on. Disabled bands leave the cascade entirely."
+                          : "Band off")
             }
         }
     }

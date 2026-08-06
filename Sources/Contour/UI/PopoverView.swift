@@ -52,6 +52,33 @@ struct PopoverView: View {
         .onDisappear { engine.endObservingMeters() }
     }
 
+    /// Opens the editor, or raises it if it is already open and buried.
+    ///
+    /// This is the alternative to keeping the window permanently on top: the
+    /// menu bar icon is how you find it again, so it does not have to sit above
+    /// everything else the rest of the time.
+    private func showEQWindow() {
+        // The popover is key while it is open; dismiss it so the window is not
+        // opening behind a panel that is about to vanish anyway.
+        let popover = NSApp.keyWindow
+        if popover?.title != EQWindowView.windowTitle {
+            popover?.orderOut(nil)
+        }
+
+        openWindow(id: EQWindowView.id)
+
+        // The scene may only exist after this runloop turn, and an LSUIElement
+        // app does not come forward on its own.
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            guard let window = NSApp.windows.first(where: {
+                $0.title == EQWindowView.windowTitle
+            }) else { return }
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+        }
+    }
+
     /// Chains the destination feeds. A stereo-only interface has one regardless.
     private var visibleChains: [Chain] {
         guard engine.supportsTwoChains else { return [.a] }
@@ -78,12 +105,12 @@ struct PopoverView: View {
                 .help("Contour \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber))")
             Spacer()
             Button {
-                openWindow(id: EQWindowView.id)
+                showEQWindow()
             } label: {
                 Image(systemName: "macwindow")
             }
             .buttonStyle(.plain)
-            .help("Open the large EQ editor")
+            .help("Open the large EQ editor, or bring it to the front")
             Text(statusText).font(.caption).foregroundStyle(.secondary)
         }
     }
