@@ -57,8 +57,6 @@ struct EQWindowView: View {
         VStack(spacing: 12) {
             toolbar
 
-            ProcessingListView(engine: engine, chain: shownChain)
-
             if let transferMessage {
                 Text(transferMessage)
                     .font(.caption)
@@ -78,6 +76,12 @@ struct EQWindowView: View {
             bandStrip
                 .disabled(!settings.wrappedValue.eq.isEnabled)
                 .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+            Divider()
+
+            // Below the EQ: the list is the signal path, and reading it under
+            // the thing being edited matches the order audio actually travels.
+            ProcessingListView(engine: engine, chain: shownChain)
+
             Divider()
             levels
         }
