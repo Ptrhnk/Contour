@@ -15,6 +15,7 @@ struct EQSection: View {
     @State private var selectedBand = 2
 
     @State private var transferMessage: String?
+    @State private var showingTransfer = false
 
     /// All three the same width, so the middle knob's centre *is* the group's
     /// centre. With 60/52/48 the group centred correctly but Gain sat about six
@@ -84,28 +85,49 @@ struct EQSection: View {
             .controlSize(.small)
             .disabled(settings.eq.bands.allSatisfy { $0.gainDB == 0 })
             .help("Set every band's gain to 0 dB. Frequencies and Q are kept.")
-            Menu {
-                Button("Paste AutoEq Text") { importFromClipboard() }
-                Button("Open AutoEq File…") { importFromFile() }
-                Divider()
-                Button("Copy as AutoEq Text") { exportToClipboard() }
-                Button("Save AutoEq File…") { exportToFile() }
+            // An ordinary button rather than a Menu. A menu label carries its
+            // own intrinsic metrics that no font or frame reliably overrides, so
+            // the glyph kept sitting high against the controls beside it; a
+            // button in the same style as Flatten matches its height for free.
+            Button {
+                showingTransfer = true
             } label: {
-                // A fixed box keeps the glyph on the row's centre line; left to
-                // itself the menu label sits high against the text beside it.
-                Image(systemName: "square.and.arrow.down")
-                    .frame(width: 20, height: 18)
+                HStack(spacing: 1) {
+                    // Nudged up: the glyph's tray sits at its base, so its
+                    // optical centre is below its geometric one.
+                    Image(systemName: "square.and.arrow.down")
+                        .offset(y: -1)
+                    // Says "this opens something" rather than "this does
+                    // something", which is the whole difference from Flatten.
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7, weight: .semibold))
+                }
+                .frame(height: 18)
+                .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .controlSize(.small)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
             .help("Import or export the curve as AutoEq ParametricEQ.txt. "
                   + "You can also drop a file or text onto the curve.")
+            .popover(isPresented: $showingTransfer, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    transferButton("Paste AutoEq Text") { importFromClipboard() }
+                    transferButton("Open AutoEq File…") { importFromFile() }
+                    Divider()
+                    transferButton("Copy as AutoEq Text") { exportToClipboard() }
+                    transferButton("Save AutoEq File…") { exportToFile() }
+                }
+                .padding(10)
+                .frame(width: 180)
+            }
+
+            // A divider, because what follows is state rather than an action.
+            // Filled means "currently on", which Flatten can never be.
+            Divider().frame(height: 12)
 
             Toggle("Adapt. Q", isOn: $settings.eq.adaptiveQ)
-                .toggleStyle(.checkbox)
-                .font(.caption)
+                .toggleStyle(.button)
+                .controlSize(.small)
                 .help("Q widens as gain approaches zero. Off by default so imported "
                       + "AutoEq and EQ Eight curves keep their exact Q values.")
         }
@@ -226,6 +248,19 @@ struct EQSection: View {
             .font(.caption.monospacedDigit())
             .multilineTextAlignment(.trailing)
             .frame(width: width)
+    }
+
+    private func transferButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button {
+            showingTransfer = false
+            action()
+        } label: {
+            Text(title)
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - AutoEq text
