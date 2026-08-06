@@ -9,10 +9,13 @@ struct ContourApp: App {
         MenuBarExtra {
             PopoverView(engine: delegate.engine, launchAgent: delegate.launchAgent)
         } label: {
-            // The icon answers "where is the sound going" without opening anything.
-            Image(systemName: delegate.engine.status.isRunning
-                  ? delegate.engine.destination.symbol
-                  : "waveform.slash")
+            // The icon answers "where is the sound going" without opening
+            // anything. A view rather than a bare Image so it can hand
+            // `openWindow` to EQWindowPresenter — the status item's context menu
+            // is AppKit and cannot reach the environment itself.
+            MenuBarLabel(symbol: delegate.engine.status.isRunning
+                         ? delegate.engine.destination.symbol
+                         : "waveform.slash")
         }
         .menuBarExtraStyle(.window)
 
@@ -75,8 +78,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func openEQWindow() {
+        EQWindowPresenter.shared.show()
+    }
+
     private func showStatusItemMenu(over view: NSView) {
         let menu = NSMenu()
+        let editor = NSMenuItem(title: "Open EQ Editor",
+                                action: #selector(openEQWindow),
+                                keyEquivalent: "e")
+        editor.target = self
+        menu.addItem(editor)
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Contour",
                               action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")

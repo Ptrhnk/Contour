@@ -120,8 +120,11 @@ struct FilterTypePicker: View {
     var iconSize = CGSize(width: 20, height: 14)
 
     /// Low end on the top row, high end below, so position carries meaning too.
+    /// The two symmetric filters sit on opposite corners — bell top right, notch
+    /// bottom left — and the two cuts on the other two, which reads better than
+    /// grouping by kind down the columns.
     private var rows: [[EQBandType]] {
-        [[.lowCut, .lowShelf, .bell], [.highCut, .highShelf, .notch]]
+        [[.lowCut, .lowShelf, .bell], [.notch, .highShelf, .highCut]]
     }
 
     var body: some View {
