@@ -505,9 +505,16 @@ final class AudioEngine {
                     return existing
                 }
                 do {
-                    let created = try await PluginHost(descriptor: descriptor,
-                                                       sampleRate: sampleRate,
-                                                       maximumFrames: frames)
+                    // Detached, so it runs off the main actor. Loading a plugin
+                    // calls into the plugin's own code, which can block for a
+                    // long time or indefinitely — on the main actor that is a
+                    // frozen app, and it froze on every launch for a chain that
+                    // had such a plugin saved in it.
+                    let created = try await Task.detached(priority: .userInitiated) {
+                        try await PluginHost(descriptor: descriptor,
+                                             sampleRate: sampleRate,
+                                             maximumFrames: frames)
+                    }.value
                     created.fullState = item.state
                     hosts[item.id] = created
                     return created
