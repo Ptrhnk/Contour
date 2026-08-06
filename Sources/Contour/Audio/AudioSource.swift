@@ -1,9 +1,13 @@
 import AVFoundation
+import CoreAudio
 
 /// Planar float buffers handed to the render block on the realtime thread.
 /// Every pointer is pre-allocated at setup; the render block must not allocate,
 /// lock, log, or touch ARC.
 struct RenderBuffers {
+    /// Plugins need the host timestamp; passing the IOProc's keeps every unit on
+    /// the same clock.
+    let timestamp: UnsafePointer<AudioTimeStamp>
     let inputL: UnsafeMutablePointer<Float>
     let inputR: UnsafeMutablePointer<Float>
     let chainAL: UnsafeMutablePointer<Float>

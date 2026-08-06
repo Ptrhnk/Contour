@@ -153,7 +153,7 @@ final class LaunchAgent {
 
     private func retire(label: String, plist: URL) {
         // Fails harmlessly when the job was never loaded.
-        try? launchctl(["bootout", "\(domain)/\(label)"])
+        _ = try? launchctl(["bootout", "\(domain)/\(label)"])
         try? FileManager.default.removeItem(at: plist)
     }
 

@@ -300,6 +300,8 @@ private struct ChainSection: View {
             }
 
             Divider()
+            ProcessingListView(engine: engine, chain: chain)
+            Divider()
             EQSection(settings: settings, sampleRate: engine.eqSampleRate)
         }
         .opacity(isActive ? 1 : 0.6)

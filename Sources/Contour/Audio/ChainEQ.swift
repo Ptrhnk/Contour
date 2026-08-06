@@ -1,5 +1,6 @@
 import CContourAtomics
 import ContourDSP
+import CoreAudio
 import Foundation
 
 /// Triple-buffered handoff of a flattened coefficient set to the audio thread.
@@ -74,6 +75,8 @@ final class ChainEQ: @unchecked Sendable {
 
     let kernel: EQKernel
     let publisher: CoefficientPublisher
+    /// Plugins around this EQ. Swapped atomically when the set changes.
+    let graphs = ProcessingGraphPublisher()
     /// Touched only by the realtime thread.
     private var lastGeneration: UInt32 = 0
 
@@ -106,15 +109,33 @@ final class ChainEQ: @unchecked Sendable {
     }
 
     /// Realtime thread. No allocation, no locks.
+    ///
+    /// Order is the processing list: plugins before the EQ, the EQ, then the
+    /// plugins after it.
     @inline(__always)
     func process(left: UnsafeMutablePointer<Float>,
                  right: UnsafeMutablePointer<Float>,
-                 frames: Int) {
+                 frames: Int,
+                 timestamp: UnsafePointer<AudioTimeStamp>) {
+        let graph = graphs.current()
+
+        if let graph {
+            for plugin in graph.before {
+                plugin.render(left: left, right: right, frames: frames, timestamp: timestamp)
+            }
+        }
+
         let generation = publisher.generation
         if generation != lastGeneration {
             lastGeneration = generation
             kernel.setTargets(raw: publisher.pointer(for: generation))
         }
         kernel.process(left: left, right: right, frames: frames)
+
+        if let graph {
+            for plugin in graph.after {
+                plugin.render(left: left, right: right, frames: frames, timestamp: timestamp)
+            }
+        }
     }
 }
