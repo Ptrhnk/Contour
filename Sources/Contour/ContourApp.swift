@@ -105,6 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Plugin settings live inside the plugin until asked for.
+        for chain in Chain.allCases { engine.capturePluginStates(for: chain) }
         engine.stop()
     }
 }

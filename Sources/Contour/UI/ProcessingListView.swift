@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The ordered processing list for one chain: the EQ and any plugins, dragged
 /// into whatever order you want.
@@ -11,6 +12,7 @@ struct ProcessingListView: View {
 
     @State private var showingPicker = false
     @State private var search = ""
+    @State private var dropTarget: UUID?
 
     private var settings: Binding<ChainSettings> {
         chain == .a ? $engine.chainA : $engine.chainB
@@ -66,6 +68,7 @@ struct ProcessingListView: View {
             Image(systemName: "line.3.horizontal")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+                .help("Drag to reorder")
 
             PowerToggle(isOn: bypassBinding(item), diameter: 16)
                 .help(item.isEQ
@@ -99,26 +102,28 @@ struct ProcessingListView: View {
                 .help("Remove")
             }
 
-            Button {
-                move(item, by: -1)
-            } label: {
-                Image(systemName: "chevron.up")
-            }
-            .buttonStyle(.plain)
-            .disabled(items.first?.id == item.id)
-
-            Button {
-                move(item, by: 1)
-            } label: {
-                Image(systemName: "chevron.down")
-            }
-            .buttonStyle(.plain)
-            .disabled(items.last?.id == item.id)
         }
         .font(.caption)
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         .padding(.horizontal, 6)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 4))
+        .background(dropTarget == item.id
+                    ? Color.accentColor.opacity(0.25)
+                    : Color.primary.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(Rectangle())
+        // Order is the signal path, so dragging a row is the direct way to say
+        // "run this before that" — including moving a plugin above or below the
+        // EQ, which is the whole point of the EQ being a row (§4).
+        .draggable(item.id.uuidString) {
+            Text(item.title).font(.caption).padding(4)
+        }
+        .dropDestination(for: String.self) { payload, _ in
+            guard let raw = payload.first, let dragged = UUID(uuidString: raw) else { return false }
+            dropTarget = nil
+            return move(dragged, before: item.id)
+        } isTargeted: { targeted in
+            dropTarget = targeted ? item.id : (dropTarget == item.id ? nil : dropTarget)
+        }
     }
 
     private var pluginPicker: some View {
@@ -180,16 +185,23 @@ struct ProcessingListView: View {
             get: { !item.isBypassed },
             set: { active in
                 guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+                engine.capturePluginStates(for: chain)
                 settings.wrappedValue.processing[index].isBypassed = !active
             })
     }
 
+    /// Every mutation captures live plugin state first. Changing the list
+    /// rebuilds the graph, and the rebuild reapplies each item's stored state —
+    /// so without this, reordering or bypassing would quietly revert whatever
+    /// had been tweaked in a plugin's own window.
     private func add(_ descriptor: AudioUnitDescriptor) {
+        engine.capturePluginStates(for: chain)
         settings.wrappedValue.processing.append(
             ProcessingItem(kind: .plugin(descriptor)))
     }
 
     private func remove(_ item: ProcessingItem) {
+        engine.capturePluginStates(for: chain)
         settings.wrappedValue.processing.removeAll { $0.id == item.id }
     }
 
@@ -197,6 +209,21 @@ struct ProcessingListView: View {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         let target = index + offset
         guard target >= 0, target < items.count else { return }
+        engine.capturePluginStates(for: chain)
         settings.wrappedValue.processing.swapAt(index, target)
+    }
+
+    @discardableResult
+    private func move(_ dragged: UUID, before target: UUID) -> Bool {
+        guard dragged != target,
+              let from = items.firstIndex(where: { $0.id == dragged }),
+              let to = items.firstIndex(where: { $0.id == target })
+        else { return false }
+        engine.capturePluginStates(for: chain)
+        var updated = settings.wrappedValue.processing
+        let moved = updated.remove(at: from)
+        updated.insert(moved, at: to)
+        settings.wrappedValue.processing = updated
+        return true
     }
 }

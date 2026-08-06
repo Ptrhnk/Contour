@@ -477,7 +477,14 @@ final class AudioEngine {
             func host(for item: ProcessingItem) async -> PluginHost? {
                 guard let descriptor = item.descriptor else { return nil }
                 if let existing = hosts[item.id],
-                   existing.descriptor.id == descriptor.id { return existing }
+                   existing.descriptor.id == descriptor.id {
+                    // Reused instances get the stored state too, or loading the
+                    // same preset twice would keep whatever was tweaked in
+                    // between. Callers capture live state before mutating the
+                    // list, so this never overwrites unsaved work.
+                    if let state = item.state { existing.fullState = state }
+                    return existing
+                }
                 do {
                     let created = try await PluginHost(descriptor: descriptor,
                                                        sampleRate: sampleRate,
@@ -602,13 +609,18 @@ final class AudioEngine {
         setLoadedPreset(preset.id, for: chain)
     }
 
+    /// Captures first: a plugin's own settings live inside the plugin until
+    /// asked for, so a preset saved without this records the curve and misses
+    /// everything the plugin was set to.
     func savePresetAsNew(named name: String, from chain: Chain) {
+        capturePluginStates(for: chain)
         let preset = presets.add(name: name, settings: settings(for: chain))
         setLoadedPreset(preset.id, for: chain)
     }
 
     func updateLoadedPreset(from chain: Chain) {
         guard let id = loadedPresetID(for: chain) else { return }
+        capturePluginStates(for: chain)
         presets.update(id: id, settings: settings(for: chain))
     }
 
