@@ -17,6 +17,9 @@ struct EQWindowView: View {
     static let id = "eq-editor"
     static let windowTitle = "Contour EQ"
 
+    /// Equal widths, so the middle knob sits on the group's centre line.
+    private static let knobColumnWidth: CGFloat = 74
+
     private static let trimRange =
         Double(ChainSettings.trimRange.lowerBound)...Double(ChainSettings.trimRange.upperBound)
     private static let gainRange =
@@ -171,13 +174,13 @@ struct EQWindowView: View {
 
                 HStack(alignment: .top, spacing: 22) {
                     knob("Freq", band.frequency, EQBand.frequencyRange, logarithmic: true,
-                         defaultValue: nil, width: 78)
+                         defaultValue: nil, width: Self.knobColumnWidth)
                     knob("Gain", band.gainDB, EQBand.gainRange, logarithmic: false,
-                         defaultValue: 0, width: 66)
+                         defaultValue: 0, width: Self.knobColumnWidth)
                         .disabled(!band.wrappedValue.type.usesGain)
                         .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
                     knob("Q", band.q, band.wrappedValue.editableQRange, logarithmic: true,
-                         defaultValue: 0.7, width: 60)
+                         defaultValue: 0.7, width: Self.knobColumnWidth)
                 }
 
                 PowerToggle(isOn: band.isEnabled, diameter: 34)

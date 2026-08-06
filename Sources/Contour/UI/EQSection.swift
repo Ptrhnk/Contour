@@ -16,6 +16,12 @@ struct EQSection: View {
 
     @State private var transferMessage: String?
 
+    /// All three the same width, so the middle knob's centre *is* the group's
+    /// centre. With 60/52/48 the group centred correctly but Gain sat about six
+    /// points right of it, which is exactly the sort of near-miss that reads as
+    /// broken.
+    private static let knobColumnWidth: CGFloat = 56
+
     private static let trimRange =
         Double(ChainSettings.trimRange.lowerBound)...Double(ChainSettings.trimRange.upperBound)
 
@@ -26,10 +32,9 @@ struct EQSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
-
             // The curve has no intrinsic height any more, so the popover sets
             // one; the large window lets it fill instead.
+            headerDimmed
             EQCurveView(settings: $settings.eq,
                         selectedBand: $selectedBand,
                         model: model,
@@ -53,8 +58,16 @@ struct EQSection: View {
         }
     }
 
+    /// The header greys out with the rest of the panel, so "EQ off" is one
+    /// visual state rather than a switched-off body under a live-looking title.
+    private var headerDimmed: some View {
+        header
+            .disabled(!settings.eq.isEnabled)
+            .opacity(settings.eq.isEnabled ? 1 : 0.4)
+    }
+
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             // No power button here: the Processing list above already owns the
             // EQ's on/off, and two controls for one flag invite the question of
             // whether they mean different things.
@@ -78,7 +91,10 @@ struct EQSection: View {
                 Button("Copy as AutoEq Text") { exportToClipboard() }
                 Button("Save AutoEq File…") { exportToFile() }
             } label: {
+                // A fixed box keeps the glyph on the row's centre line; left to
+                // itself the menu label sits high against the text beside it.
                 Image(systemName: "square.and.arrow.down")
+                    .frame(width: 20, height: 18)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -144,14 +160,14 @@ struct EQSection: View {
                                range: EQBand.frequencyRange,
                                logarithmic: true,
                                defaultValue: nil,
-                               fieldWidth: 60)
+                               fieldWidth: Self.knobColumnWidth)
 
                     knobColumn(title: "Gain",
                                value: band.gainDB,
                                range: EQBand.gainRange,
                                logarithmic: false,
                                defaultValue: 0,
-                               fieldWidth: 52)
+                               fieldWidth: Self.knobColumnWidth)
                         .disabled(!band.wrappedValue.type.usesGain)
                         .opacity(band.wrappedValue.type.usesGain ? 1 : 0.4)
 
@@ -160,7 +176,7 @@ struct EQSection: View {
                                range: band.wrappedValue.editableQRange,
                                logarithmic: true,
                                defaultValue: 0.7,
-                               fieldWidth: 48)
+                               fieldWidth: Self.knobColumnWidth)
                 }
 
                 PowerToggle(isOn: band.isEnabled, diameter: 26)
