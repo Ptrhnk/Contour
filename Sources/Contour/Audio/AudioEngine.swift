@@ -467,6 +467,22 @@ final class AudioEngine {
     func rebuildGraph(for chain: Chain) {
         graphBuilds[chain]?.cancel()
         let settings = settings(for: chain)
+
+        // Bypassing or reordering never needs a new instance, so when every
+        // plugin is already live the graph is rebuilt here and now. Going
+        // through the async path meant a plugin that blocks — SoundID Reference
+        // does — could stall the rebuild, leaving the *previous* graph running.
+        // That looks exactly like a bypass that did nothing.
+        if let graph = graphFromLiveHosts(settings: settings, chain: chain) {
+            eq(for: chain).graphs.publish(graph)
+            pluginLatencyFrames[chain] = graph.latencyFrames
+            Self.log.notice("""
+                \(chain.title, privacy: .public) graph rebuilt from live plugins: \
+                \(Self.describe(graph), privacy: .public)
+                """)
+            return
+        }
+
         let sampleRate = eqSampleRate
         let frames = BlackHoleSource.scratchCapacity
 
@@ -534,13 +550,42 @@ final class AudioEngine {
             self.eq(for: chain).graphs.publish(graph)
             self.pluginLatencyFrames[chain] = graph.latencyFrames
             self.pluginFailure = failure
-            let names = (before.map { "\($0.descriptor.name) (pre)" }
-                         + after.map { "\($0.descriptor.name) (post)" })
-            let listed = names.isEmpty ? "EQ only" : names.joined(separator: ", ")
             Self.log.notice("""
-                \(chain.title, privacy: .public) graph: \(listed, privacy: .public)
+                \(chain.title, privacy: .public) graph: \
+                \(AudioEngine.describe(graph), privacy: .public)
                 """)
         }
+    }
+
+    /// A graph built only from instances already loaded, or nil when something
+    /// would have to be instantiated.
+    private func graphFromLiveHosts(settings: ChainSettings, chain: Chain) -> ProcessingGraph? {
+        let hosts = liveHosts[chain] ?? [:]
+        var before: [PluginHost] = []
+        var after: [PluginHost] = []
+
+        for item in settings.processing where !item.isEQ {
+            guard let descriptor = item.descriptor,
+                  let host = hosts[item.id],
+                  host.descriptor.id == descriptor.id
+            else { return nil }
+            host.isBypassed = item.isBypassed
+        }
+        for item in settings.pluginsBeforeEQ {
+            guard let host = hosts[item.id] else { return nil }
+            if !item.isBypassed { before.append(host) }
+        }
+        for item in settings.pluginsAfterEQ {
+            guard let host = hosts[item.id] else { return nil }
+            if !item.isBypassed { after.append(host) }
+        }
+        return ProcessingGraph(before: before, after: after)
+    }
+
+    private static func describe(_ graph: ProcessingGraph) -> String {
+        let names = graph.before.map { "\($0.descriptor.name) (pre)" }
+            + graph.after.map { "\($0.descriptor.name) (post)" }
+        return names.isEmpty ? "EQ only" : names.joined(separator: ", ")
     }
 
     /// Captures each plugin's own state so it can be persisted with the chain.

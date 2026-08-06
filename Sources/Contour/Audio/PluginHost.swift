@@ -92,19 +92,47 @@ final class PluginHost: @unchecked Sendable {
     /// In-process. Falls back to the default options rather than failing
     /// outright, because a plugin that cannot be hosted at all is worse than one
     /// hosted with more jitter — but that case is logged, because it matters.
+    /// Seconds a plugin gets to load before it is given up on. Hosting is
+    /// in-process, so a unit that never returns would otherwise hold the chain
+    /// rebuild open indefinitely and leave the previous graph running.
+    private static let instantiationTimeout: Duration = .seconds(20)
+
     private static func instantiate(_ descriptor: AudioUnitDescriptor) async throws -> AUAudioUnit {
         do {
-            return try await AUAudioUnit.instantiate(
-                with: descriptor.audioComponentDescription,
-                options: [.loadInProcess])
+            return try await withTimeout(instantiationTimeout) {
+                try await AUAudioUnit.instantiate(
+                    with: descriptor.audioComponentDescription,
+                    options: [.loadInProcess])
+            }
         } catch {
             log.error("""
                 \(descriptor.name, privacy: .public) would not load in-process \
                 (\(String(describing: error), privacy: .public)); \
                 retrying out-of-process, which adds IPC jitter
                 """)
-            return try await AUAudioUnit.instantiate(
-                with: descriptor.audioComponentDescription, options: [])
+            return try await withTimeout(instantiationTimeout) {
+                try await AUAudioUnit.instantiate(
+                    with: descriptor.audioComponentDescription, options: [])
+            }
+        }
+    }
+
+    /// Races the work against a sleep. The losing task is cancelled, though a
+    /// plugin blocking inside its own load will not honour that — the point is
+    /// that *we* stop waiting on it.
+    private static func withTimeout<T>(
+        _ duration: Duration,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: UncheckedBox<T>.self) { group in
+            group.addTask { UncheckedBox(try await operation()) }
+            group.addTask {
+                try await Task.sleep(for: duration)
+                throw PluginError.timedOut
+            }
+            guard let first = try await group.next() else { throw PluginError.timedOut }
+            group.cancelAll()
+            return first.value
         }
     }
 
@@ -174,12 +202,25 @@ final class PluginHost: @unchecked Sendable {
     }
 }
 
+/// Carries a non-Sendable value across a task group.
+///
+/// `AUAudioUnit` is not Sendable and a task group insists its results are.
+/// Hosting is in-process and this value never leaves the main actor, so nothing
+/// actually crosses an isolation boundary. Declared here because a generic type
+/// cannot be nested inside a generic function.
+private struct UncheckedBox<Value>: @unchecked Sendable {
+    let value: Value
+    init(_ value: Value) { self.value = value }
+}
+
 enum PluginError: Error, LocalizedError {
     case unsupportedFormat
+    case timedOut
 
     var errorDescription: String? {
         switch self {
         case .unsupportedFormat: "Could not create a stereo float format for this plugin."
+        case .timedOut: "The plugin did not finish loading."
         }
     }
 }
