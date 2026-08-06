@@ -321,16 +321,10 @@ struct PopoverView: View {
             } else {
                 Button("Start") { engine.start() }
             }
-            // Device state needs no button: the hardware listeners refresh it,
-            // and so does opening this popover. Plugins are the opposite — the
-            // list comes from a disk cache and nothing invalidates it, so one
-            // installed while Contour runs stays invisible until relaunch.
-            Button(engine.catalog.isScanning ? "Scanning…" : "Rescan plugins") {
-                engine.catalog.rescan()
-            }
-            .disabled(engine.catalog.isScanning)
-            .help("Takes a few seconds and blocks nothing. Only needed after "
-                  + "installing or removing an Audio Unit.")
+            // No refresh buttons here. Device state is kept current by the
+            // hardware listeners and by opening this popover, and the plugin
+            // scan at launch covers the only case that matters — installing an
+            // Audio Unit is already a relaunch-shaped event.
             Spacer()
             bypassToggle
             Spacer()
