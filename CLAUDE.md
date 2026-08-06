@@ -92,10 +92,12 @@ true`.
 **Backend A — process tap (preferred, build last).** `CATapDescription` with
 `initStereoGlobalTapButExcludeProcesses([own PID])` — excluding our own PID is
 mandatory or the render feeds back into itself — `muteBehavior = .muted`,
-`privateTap = true`. Aggregate with the interface as main sub-device,
-`kAudioAggregateDeviceTapListKey` referencing the tap UUID, and
-`kAudioAggregateDeviceTapAutoStartKey: true`. Needs macOS 14.4+ and the TCC
-grant.
+`privateTap = true`. Aggregate with the interface as main sub-device and
+`kAudioAggregateDeviceTapListKey` referencing the tap UUID. Needs macOS 14.2+
+and the audio-capture TCC grant.
+
+The spec called for `kAudioAggregateDeviceTapAutoStartKey: true`; it must be
+**false** — see below.
 
 Both end at the same place: one `AudioDeviceCreateIOProcIDWithBlock` on the
 aggregate, 2 channels in, 4 out. One callback, one clock domain.
@@ -138,10 +140,24 @@ after kill -9         peak 0.6103     audio came back by itself
 live taps             []              nothing leaked
 ```
 
-**A tap only mutes while it is running.** Creating one and holding it does
-nothing audible; the mute engages when an aggregate carrying it in
-`kAudioAggregateDeviceTapListKey` is started. A first attempt that created a tap
-without running it looked exactly like "mute does not work".
+**`kAudioAggregateDeviceTapAutoStartKey` must be 0.** This one cost the most.
+With it set to 1 the tap runs itself and the client IOProc is *never called* —
+measured at exactly 0 callbacks, against 375 in 4 s (93.75/s at 512 frames)
+with it off. Nothing fails: `AudioHardwareCreateAggregateDevice`,
+`AudioDeviceCreateIOProcIDWithBlock` and `AudioDeviceStart` all return `noErr`
+and the device simply never calls back.
+
+Worse, it is not even consistent. The first probe ran while the BlackHole
+backend already had the interface open, and *every* variant got callbacks —
+auto-start only starves the IOProc when nothing else is already running the
+device. Reproducing it meant quitting the app first. Auto-start exists to hold
+a tap open with no client; Contour is the client.
+
+**A tap only mutes while it is running**, but "running" starts at *creation*,
+not at `AudioDeviceStart`: `HALS_Client::AddMuter … muted by Contour` appears in
+the `coreaudiod` log the moment `AudioHardwareCreateProcessTap` returns. So a
+tap that is created but never rendered gives silence, not passthrough — which is
+exactly what the auto-start bug produced.
 
 **`CATapDescription` wants audio process objects, not Unix PIDs.** Passing
 `getpid()` fails with `kAudioHardwareBadObjectError` ('!obj') and logs
@@ -160,6 +176,12 @@ for the BlackHole backend.
 
 `kAudioHardwarePropertyTapList` enumerates live taps, which is the recovery path
 if one ever is leaked.
+
+**Two aggregates cannot share a UID.** Creating a second one with
+`com.nahak.contour.aggregate` while the first is alive fails with `'nope'`
+(`kAudioHardwareIllegalOperationError`), so a backend switch must tear the old
+one down before building the new one — which it does, since `start()` calls
+`stop()` first.
 
 ### Hosting plugins: what cannot be worked around
 
@@ -544,13 +566,13 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v0.8.0 on `au-hosting` — build-order steps 1–6 done. Step 7
-(the process-tap backend) not started.** `main` sits at v0.6.0, the EQ-only
-release.
+**Current state: v1.1.0 on `tap-backend` — build-order steps 1–7 done.**
+`main` sits at v1.0.0 with the EQ, presets and plugin hosting.
 
-Not 1.0 yet, deliberately: the spec's v1 includes the tap backend, and plugin
-hosting has only just stopped freezing. Version 1 wants step 7 done and the
-plugin path to have survived real use.
+Both backends are live and switchable at runtime from the popover's Capture
+row. The tap is the default where macOS supports it; if it fails to start,
+the engine falls back to BlackHole and says why, without persisting the
+downgrade — so fixing the permission and relaunching just works.
 
 Version lives in `Resources/Info.plist` as `CFBundleShortVersionString` and is
 shown beside the name in the popover. Tagged releases mark states worth
@@ -578,8 +600,12 @@ login with crash restart, and device-aware chain naming.
 Also on `au-hosting`: AU plugin hosting with a reorderable processing list,
 AutoEq text import and export, undo/redo, loudness-matched EQ bypass.
 
-Not there yet: the tap backend, a global hotkey, scroll-wheel-for-Q, 31-band
-mode, spectrum analyser.
+Also on `tap-backend`: the process-tap backend, with the shared realtime
+machinery (channel mapping, startup gate, metering) factored into
+`AggregateRenderer` so both backends run identical code below the capture point.
+
+Not there yet: a global hotkey, scroll-wheel-for-Q, 31-band mode, spectrum
+analyser.
 
 Measured with the popover closed: **1.7% of one core**, ~80 MB RSS.
 

@@ -27,6 +27,13 @@ protocol AudioSource: AnyObject {
     var format: AVAudioFormat { get }
     /// Total output latency of the underlying device path, in frames.
     var outputLatencyFrames: Int { get }
+    /// The rate the device path is running at now, which after a system sample
+    /// rate change is not the rate it was built with. 0 when not started.
+    var currentSampleRate: Double { get }
+    /// What the aggregate ended up looking like, for the diagnostics panel.
+    var layoutDescription: String { get }
     func start(_ render: @escaping RenderBlock) throws
     func stop()
+    /// Reads the peaks accumulated since the last call and clears them.
+    func consumeMeters() -> AggregateRenderer.Meters
 }

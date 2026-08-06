@@ -1,169 +1,20 @@
-import Accelerate
 import AVFoundation
 import CoreAudio
 
 /// Backend B. System output is set to BlackHole; Contour reads it back out of the
 /// aggregate and writes the processed result to the interface's channel pairs.
+///
+/// Works on every macOS version and needs no permission prompt, at the cost of
+/// requiring BlackHole to be installed and the system output to be pointed at it.
 final class BlackHoleSource: AudioSource {
-
-    /// Everything the IOProc touches, allocated once at start and never resized.
-    /// Held by the source for the lifetime of the proc and reached from the
-    /// realtime thread through an unretained opaque pointer.
-    private final class RenderState {
-        let capacity: Int
-        let inL, inR, aL, aR, bL, bR: UnsafeMutablePointer<Float>
-        let inputPair: ChannelPairSlot
-        let pairA: ChannelPairSlot?
-        let pairB: ChannelPairSlot?
-        let render: RenderBlock
-
-        /// Startup gate. The first buffers a device hands back after starting
-        /// can contain stale ring-buffer memory — measured at magnitudes of 5
-        /// to 12, i.e. +14 to +21 dBFS. That is a dangerous noise burst, and it
-        /// is not deterministic: it depends on what the device last held, so a
-        /// fixed-length mute is not reliably long enough.
-        ///
-        /// Instead the input is held silent until it has actually looked sane
-        /// for a few consecutive blocks, then faded in. All realtime-thread only.
-        let minimumMuteFrames: Int
-        let maximumMuteFrames: Int
-        let fadeFrames: Int
-        var framesSinceStart: Int = 0
-        var fadeStartFrame: Int = 0
-        var calmBlocks: Int = 0
-        var isArmed = false
-        var isStartupComplete = false
-
-        /// Above this, a block is stale memory rather than audio. Real material
-        /// including intersample overs stays well under +12 dBFS.
-        static let sanityThreshold: Float = 4
-        static let requiredCalmBlocks = 3
-
-        // Word-sized plain stores from the realtime thread, read from the main
-        // thread for display only. A torn read of a meter is not worth a lock.
-        var callbacks: UInt64 = 0
-        var lastFrames: Int = 0
-        var inputPeakL: Float = 0
-        var inputPeakR: Float = 0
-        var chainAPeakL: Float = 0
-        var chainAPeakR: Float = 0
-        var chainBPeakL: Float = 0
-        var chainBPeakR: Float = 0
-
-        /// Peak per logical input channel, so "which channel is the audio on"
-        /// is answerable without guessing at the buffer layout.
-        static let maxProbeChannels = 32
-        let inPeaks: UnsafeMutablePointer<Float>
-        var inBufferCount: Int = 0
-        var inChannelCount: Int = 0
-        var outBufferCount: Int = 0
-
-        init(capacity: Int,
-             sampleRate: Double,
-             inputPair: ChannelPairSlot,
-             pairA: ChannelPairSlot?,
-             pairB: ChannelPairSlot?,
-             render: @escaping RenderBlock) {
-            let rate = sampleRate > 0 ? sampleRate : 44_100
-            minimumMuteFrames = Int(rate * 0.10)
-            maximumMuteFrames = Int(rate * 2.0)
-            fadeFrames = Int(rate * 2.0)
-            self.capacity = capacity
-            self.inputPair = inputPair
-            self.pairA = pairA
-            self.pairB = pairB
-            self.render = render
-            func alloc() -> UnsafeMutablePointer<Float> {
-                let p = UnsafeMutablePointer<Float>.allocate(capacity: capacity)
-                p.initialize(repeating: 0, count: capacity)
-                return p
-            }
-            inL = alloc(); inR = alloc()
-            aL = alloc(); aR = alloc()
-            bL = alloc(); bR = alloc()
-            inPeaks = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxProbeChannels)
-            inPeaks.initialize(repeating: 0, count: Self.maxProbeChannels)
-        }
-
-        deinit {
-            for p in [inL, inR, aL, aR, bL, bR] {
-                p.deinitialize(count: capacity)
-                p.deallocate()
-            }
-            inPeaks.deinitialize(count: Self.maxProbeChannels)
-            inPeaks.deallocate()
-        }
-    }
-
-    /// 8192 frames covers any buffer size Core Audio will ask for; allocating
-    /// generously once is cheaper than tracking buffer-size changes at runtime.
-    static let scratchCapacity = 8192
 
     private let interface: AudioDevice
     private let capture: AudioDevice
     private let chainAPairIndex: Int
     private let chainBPairIndex: Int?
 
-    private var aggregate: AggregateDevice?
-    private var procID: AudioDeviceIOProcID?
-    private var state: RenderState?
-
-    private(set) var format: AVAudioFormat
-    private(set) var outputLatencyFrames: Int = 0
-
-    struct Meters {
-        var callbacks: UInt64 = 0
-        var frames: Int = 0
-        var input = StereoPeak()
-        var chainA = StereoPeak()
-        var chainB = StereoPeak()
-        var inputBufferCount: Int = 0
-        var outputBufferCount: Int = 0
-        /// Peak on every logical input channel, for diagnosing routing.
-        var channelPeaks: [Float] = []
-    }
-
-    struct StereoPeak: Equatable {
-        var left: Float = 0
-        var right: Float = 0
-        var mono: Float { max(left, right) }
-    }
-
-    var meters: Meters {
-        guard let state else { return Meters() }
-        let count = min(state.inChannelCount, RenderState.maxProbeChannels)
-        return Meters(callbacks: state.callbacks,
-                      frames: state.lastFrames,
-                      input: StereoPeak(left: state.inputPeakL, right: state.inputPeakR),
-                      chainA: StereoPeak(left: state.chainAPeakL, right: state.chainAPeakR),
-                      chainB: StereoPeak(left: state.chainBPeakL, right: state.chainBPeakR),
-                      inputBufferCount: state.inBufferCount,
-                      outputBufferCount: state.outBufferCount,
-                      channelPeaks: (0..<count).map { state.inPeaks[$0] })
-    }
-
-    /// The rate the aggregate is actually running at right now, which is not
-    /// necessarily the rate it was built with.
-    var currentSampleRate: Double { aggregate?.sampleRate ?? 0 }
-
-    /// Reads the accumulated peaks and clears them, so the next read reports the
-    /// interval since this one. Racing the audio thread here can at worst drop a
-    /// single callback's peak, which is not worth a lock on a meter.
-    func consumeMeters() -> Meters {
-        let snapshot = meters
-        if let state {
-            state.inputPeakL = 0
-            state.inputPeakR = 0
-            state.chainAPeakL = 0
-            state.chainAPeakR = 0
-            state.chainBPeakL = 0
-            state.chainBPeakR = 0
-        }
-        return snapshot
-    }
-
-    /// Human-readable description of what the aggregate looks like, for diagnostics.
-    private(set) var layoutDescription: String = "not started"
+    private var renderer: AggregateRenderer?
+    private var fallbackFormat: AVAudioFormat
 
     init(interface: AudioDevice,
          capture: AudioDevice,
@@ -174,253 +25,40 @@ final class BlackHoleSource: AudioSource {
         self.chainAPairIndex = chainAPairIndex
         self.chainBPairIndex = chainBPairIndex
         let rate = interface.sampleRate > 0 ? interface.sampleRate : 44_100
-        self.format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
+        fallbackFormat = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
     }
 
+    var format: AVAudioFormat { renderer?.format ?? fallbackFormat }
+    var outputLatencyFrames: Int { renderer?.outputLatencyFrames ?? 0 }
+    var currentSampleRate: Double { renderer?.currentSampleRate ?? 0 }
+    var layoutDescription: String { renderer?.layoutDescription ?? "not started" }
+
     func start(_ render: @escaping RenderBlock) throws {
-        guard aggregate == nil else { return }
-
+        guard renderer == nil else { return }
         let aggregate = try AggregateDevice.create(interface: interface, capture: capture)
+        let renderer: AggregateRenderer
         do {
-            guard let inputPair = aggregate.captureInputPair else {
-                throw CA.Failure(status: nil,
-                                 what: "capture device has no usable stereo input pair "
-                                     + "in the aggregate (streams: \(aggregate.inputStreams))")
-            }
-            guard let pairA = aggregate.interfaceOutputPair(chainAPairIndex) else {
-                throw CA.Failure(status: nil,
-                                 what: "interface has no output pair \(chainAPairIndex + 1) "
-                                     + "(streams: \(aggregate.outputStreams))")
-            }
-            let pairB = chainBPairIndex.flatMap { aggregate.interfaceOutputPair($0) }
-
-            let rate = aggregate.sampleRate > 0 ? aggregate.sampleRate : interface.sampleRate
-            format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
-            outputLatencyFrames = aggregate.outputLatencyFrames
-
-            let state = RenderState(capacity: Self.scratchCapacity,
-                                    sampleRate: rate,
-                                    inputPair: inputPair,
-                                    pairA: pairA,
-                                    pairB: pairB,
-                                    render: render)
-            self.state = state
-
-            layoutDescription = """
-                aggregate=\(aggregate.id) sr=\(aggregate.sampleRate) \
-                bufferFrames=\(aggregate.bufferFrameSize)
-                interface=\(interface.name) in=\(interface.inputChannels) \
-                out=\(interface.outputChannels)
-                capture=\(capture.name) in=\(capture.inputChannels) \
-                out=\(capture.outputChannels)
-                inputStreams=\(aggregate.inputStreams) outputStreams=\(aggregate.outputStreams)
-                capturePair=buffer \(inputPair.buffer) offset \(inputPair.leftOffset) \
-                stride \(inputPair.stride)
-                pairA=buffer \(pairA.buffer) offset \(pairA.leftOffset) stride \(pairA.stride)
-                pairB=\(pairB.map { "buffer \($0.buffer) offset \($0.leftOffset) stride \($0.stride)" } ?? "none")
-                """
-
-            let opaque = Unmanaged.passUnretained(state).toOpaque()
-            var procID: AudioDeviceIOProcID?
-            try CA.check(
-                AudioDeviceCreateIOProcIDWithBlock(&procID, aggregate.id, nil) {
-                    now, inputData, _, outputData, _ in
-                    Self.process(opaque, now, inputData, outputData)
-                },
-                "create IOProc")
-            self.procID = procID
-
-            try CA.check(AudioDeviceStart(aggregate.id, procID), "start device")
-            self.aggregate = aggregate
+            renderer = try AggregateRenderer(aggregate: aggregate,
+                                             chainAPairIndex: chainAPairIndex,
+                                             chainBPairIndex: chainBPairIndex,
+                                             source: "blackhole \(capture.name)")
         } catch {
-            teardown(aggregate: aggregate)
+            // The renderer owns the aggregate only once it exists.
+            aggregate.destroy()
             throw error
         }
+        try renderer.start(render)
+        self.renderer = renderer
     }
 
     func stop() {
-        guard let aggregate else { return }
-        teardown(aggregate: aggregate)
-        self.aggregate = nil
+        renderer?.stop()
+        renderer = nil
     }
 
     deinit { stop() }
 
-    private func teardown(aggregate: AggregateDevice) {
-        if let procID {
-            AudioDeviceStop(aggregate.id, procID)
-            AudioDeviceDestroyIOProcID(aggregate.id, procID)
-            self.procID = nil
-        }
-        aggregate.destroy()
-        state = nil
-    }
-
-    // MARK: - Realtime
-
-    /// Realtime thread. No allocation, no locks, no logging, no new objects.
-    private static func process(_ opaque: UnsafeMutableRawPointer,
-                                _ timestamp: UnsafePointer<AudioTimeStamp>,
-                                _ inputData: UnsafePointer<AudioBufferList>,
-                                _ outputData: UnsafeMutablePointer<AudioBufferList>) {
-        let state = Unmanaged<RenderState>.fromOpaque(opaque).takeUnretainedValue()
-        let output = UnsafeMutableAudioBufferListPointer(outputData)
-        guard output.count > 0 else { return }
-
-        let outChannels = Int(output[0].mNumberChannels)
-        guard outChannels > 0 else { return }
-        let frames = Int(output[0].mDataByteSize) / (MemoryLayout<Float>.size * outChannels)
-
-        // Silence every output buffer first. The capture device's own output
-        // channels are part of this aggregate, and anything written there loops
-        // straight back into its input.
-        for buffer in output {
-            if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
-        }
-
-        guard frames > 0, frames <= state.capacity else { return }
-
-        var unity: Float = 1
-
-        // Deinterleave the capture pair into planar scratch.
-        let input = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
-
-        // Peak per logical input channel, in buffer order.
-        var probed = 0
-        for buffer in input {
-            let channels = Int(buffer.mNumberChannels)
-            guard let raw = buffer.mData, channels > 0 else { continue }
-            let base = raw.assumingMemoryBound(to: Float.self)
-            let available = Int(buffer.mDataByteSize) / (MemoryLayout<Float>.size * channels)
-            let n = min(frames, available)
-            for channel in 0..<channels where probed < RenderState.maxProbeChannels {
-                var peak: Float = 0
-                if n > 0 {
-                    vDSP_maxmgv(base + channel, vDSP_Stride(channels), &peak, vDSP_Length(n))
-                }
-                state.inPeaks[probed] = peak
-                probed += 1
-            }
-        }
-        state.inBufferCount = input.count
-        state.inChannelCount = probed
-        state.outBufferCount = output.count
-
-        let slot = state.inputPair
-        if slot.buffer < input.count, let raw = input[slot.buffer].mData,
-           Int(input[slot.buffer].mDataByteSize)
-            >= frames * Int(input[slot.buffer].mNumberChannels) * MemoryLayout<Float>.size {
-            let src = raw.assumingMemoryBound(to: Float.self) + slot.leftOffset
-            vDSP_vsmul(src, vDSP_Stride(slot.stride), &unity,
-                       state.inL, 1, vDSP_Length(frames))
-            vDSP_vsmul(src + 1, vDSP_Stride(slot.stride), &unity,
-                       state.inR, 1, vDSP_Length(frames))
-        } else {
-            vDSP_vclr(state.inL, 1, vDSP_Length(frames))
-            vDSP_vclr(state.inR, 1, vDSP_Length(frames))
-        }
-
-        applyStartupGate(state, frames)
-
-        vDSP_vclr(state.aL, 1, vDSP_Length(frames))
-        vDSP_vclr(state.aR, 1, vDSP_Length(frames))
-        vDSP_vclr(state.bL, 1, vDSP_Length(frames))
-        vDSP_vclr(state.bR, 1, vDSP_Length(frames))
-
-        state.render(RenderBuffers(timestamp: timestamp,
-                                   inputL: state.inL,
-                                   inputR: state.inR,
-                                   chainAL: state.aL,
-                                   chainAR: state.aR,
-                                   chainBL: state.bL,
-                                   chainBR: state.bR,
-                                   frameCount: frames))
-
-        write(state.aL, state.aR, to: state.pairA, output, frames, &unity)
-        write(state.bL, state.bR, to: state.pairB, output, frames, &unity)
-
-        // Post-gain peaks, accumulated as a running max until the UI consumes
-        // them. Reporting only the newest callback would miss all but one
-        // buffer in ~43 while the popover is closed.
-        accumulate(state.inL, frames, into: &state.inputPeakL)
-        accumulate(state.inR, frames, into: &state.inputPeakR)
-        accumulate(state.aL, frames, into: &state.chainAPeakL)
-        accumulate(state.aR, frames, into: &state.chainAPeakR)
-        accumulate(state.bL, frames, into: &state.chainBPeakL)
-        accumulate(state.bR, frames, into: &state.chainBPeakR)
-        state.lastFrames = frames
-        state.callbacks &+= 1
-    }
-
-    /// Hold silent until the input looks like audio, then fade in. Applied to
-    /// the input before anything downstream, so stale memory cannot reach the
-    /// biquads and ring them either.
-    @inline(__always)
-    private static func applyStartupGate(_ state: RenderState, _ frames: Int) {
-        guard !state.isStartupComplete else { return }
-        let count = vDSP_Length(frames)
-        state.framesSinceStart += frames
-
-        if !state.isArmed {
-            var peakL: Float = 0
-            var peakR: Float = 0
-            vDSP_maxmgv(state.inL, 1, &peakL, count)
-            vDSP_maxmgv(state.inR, 1, &peakR, count)
-
-            let calm = max(peakL, peakR) <= RenderState.sanityThreshold
-            state.calmBlocks = calm ? state.calmBlocks + 1 : 0
-
-            let waitedLongEnough = state.framesSinceStart >= state.minimumMuteFrames
-            let settled = state.calmBlocks >= RenderState.requiredCalmBlocks
-            // Never stay muted forever: a genuinely hot source must still play.
-            let timedOut = state.framesSinceStart >= state.maximumMuteFrames
-
-            if (waitedLongEnough && settled) || timedOut {
-                state.isArmed = true
-                state.fadeStartFrame = state.framesSinceStart
-            }
-            vDSP_vclr(state.inL, 1, count)
-            vDSP_vclr(state.inR, 1, count)
-            return
-        }
-
-        let elapsed = state.framesSinceStart - state.fadeStartFrame
-        guard elapsed < state.fadeFrames else {
-            state.isStartupComplete = true
-            return
-        }
-        let from = Float(max(elapsed - frames, 0)) / Float(state.fadeFrames)
-        let to = Float(min(elapsed, state.fadeFrames)) / Float(state.fadeFrames)
-        let step = (to - from) / Float(frames)
-        // vDSP_vrampmul advances `start`, so each channel needs its own copy.
-        var start = from
-        var increment = step
-        vDSP_vrampmul(state.inL, 1, &start, &increment, state.inL, 1, count)
-        start = from
-        increment = step
-        vDSP_vrampmul(state.inR, 1, &start, &increment, state.inR, 1, count)
-    }
-
-    @inline(__always)
-    private static func accumulate(_ samples: UnsafeMutablePointer<Float>,
-                                   _ frames: Int,
-                                   into destination: inout Float) {
-        var value: Float = 0
-        vDSP_maxmgv(samples, 1, &value, vDSP_Length(frames))
-        if value > destination { destination = value }
-    }
-
-    @inline(__always)
-    private static func write(_ left: UnsafeMutablePointer<Float>,
-                              _ right: UnsafeMutablePointer<Float>,
-                              to pair: ChannelPairSlot?,
-                              _ output: UnsafeMutableAudioBufferListPointer,
-                              _ frames: Int,
-                              _ unity: inout Float) {
-        guard let pair, pair.buffer < output.count,
-              let raw = output[pair.buffer].mData else { return }
-        let dst = raw.assumingMemoryBound(to: Float.self) + pair.leftOffset
-        vDSP_vsmul(left, 1, &unity, dst, vDSP_Stride(pair.stride), vDSP_Length(frames))
-        vDSP_vsmul(right, 1, &unity, dst + 1, vDSP_Stride(pair.stride), vDSP_Length(frames))
+    func consumeMeters() -> AggregateRenderer.Meters {
+        renderer?.consumeMeters() ?? AggregateRenderer.Meters()
     }
 }

@@ -152,7 +152,10 @@ struct PopoverView: View {
             EmptyView()
         }
 
-        if let capture = engine.capture, !engine.systemOutputIsCapture {
+        // Both only apply when system audio is routed through BlackHole; the tap
+        // captures wherever the system output happens to point.
+        if engine.backend == .blackHole,
+           let capture = engine.capture, !engine.systemOutputIsCapture {
             Notice(text: "System output is “\(engine.systemOutput?.name ?? "unknown")”. "
                        + "Contour only hears audio sent to \(capture.name).",
                    tint: .orange) {
@@ -160,7 +163,23 @@ struct PopoverView: View {
             }
         }
 
-        if let volume = engine.captureVolume, volume < 0.999 {
+        if let failure = engine.tapFailure {
+            Notice(text: "The tap backend could not start, so Contour fell back to "
+                       + "BlackHole. \(failure)",
+                   tint: .orange) {
+                Button("Try the tap again") { engine.backend = .tap }
+            }
+        }
+
+        if engine.backend == .tap, engine.systemOutputIsCapture, let interface = engine.interface {
+            Notice(text: "System output is still BlackHole. The tap does not need it, "
+                       + "and the volume keys act on whatever the system output is.",
+                   tint: .orange) {
+                Button("Set output to \(interface.name)") { engine.makeInterfaceSystemOutput() }
+            }
+        }
+
+        if engine.backend == .blackHole, let volume = engine.captureVolume, volume < 0.999 {
             Notice(text: "\(engine.capture?.name ?? "Capture device") volume is "
                        + "\(Int((volume * 100).rounded()))%. That attenuates digitally before "
                        + "Contour sees the audio — set it to 100% and use the hardware knob.",
@@ -174,6 +193,22 @@ struct PopoverView: View {
 
     private var details: some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 6) {
+            if Backend.isTapSupported {
+                GridRow {
+                    Text("Capture").gridLabel()
+                    Picker("", selection: Binding(
+                        get: { engine.backend },
+                        set: { engine.backend = $0 })) {
+                        ForEach(Backend.allCases.filter(\.isSupported)) { backend in
+                            Text(backend.title).tag(backend)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .help(engine.backend.requirement)
+                }
+            }
             GridRow {
                 Text("Interface").gridLabel()
                 Picker("", selection: interfaceSelection) {
@@ -226,11 +261,15 @@ struct PopoverView: View {
                             .help("Contour appears there as a background item")
                     }
                 }
-                .help("With BlackHole as the system output, nothing drains it while "
-                      + "Contour is not running — so there is no sound at all. "
-                      + "launchd also restarts Contour if it exits abnormally, which "
-                      + "is what a crashing plugin looks like. Quitting from the menu "
-                      + "stays quit.")
+                .help(engine.backend == .blackHole
+                      ? "With BlackHole as the system output, nothing drains it while "
+                        + "Contour is not running — so there is no sound at all. "
+                        + "launchd also restarts Contour if it exits abnormally, which "
+                        + "is what a crashing plugin looks like. Quitting from the menu "
+                        + "stays quit."
+                      : "launchd restarts Contour if it exits abnormally, which is what "
+                        + "a crashing plugin looks like. Quitting from the menu stays "
+                        + "quit — on the tap backend that just returns audio to normal.")
             }
             if let failure = launchAgent.failure {
                 GridRow {

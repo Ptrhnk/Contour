@@ -91,6 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// on launch, which must happen whether or not the popover is ever opened.
     let launchAgent = LaunchAgent()
 
+    private var signalSources: [any DispatchSourceSignal] = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Belt and braces alongside the Info.plist keys: the EQ window is
         // incidental, the audio engine is the point, so the process must
@@ -101,6 +103,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // where the wait is in the way.
         engine.catalog.scanIfNeeded()
         engine.start()
+        installTerminationSignalHandlers()
+    }
+
+    /// launchd sends `SIGTERM` at logout, and the default disposition kills the
+    /// process without ever reaching `applicationWillTerminate`. Measured: even a
+    /// `SIGKILL` leaves no tap behind and audio returns by itself, so this is not
+    /// what makes the mute safe — it just makes the exit orderly.
+    private func installTerminationSignalHandlers() {
+        for number in [SIGTERM, SIGINT] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+            source.resume()
+            signalSources.append(source)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
