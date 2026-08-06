@@ -124,6 +124,34 @@ memset away.
 Streams are verified 32-bit float at aggregate creation and creation fails
 otherwise, so the render path can assume `Float`.
 
+### Hosting plugins: what cannot be worked around
+
+Plugins are hosted **in-process** deliberately (§6) — out-of-process isolation
+adds IPC jitter a realtime insert cannot absorb. The consequence is that a badly
+behaved plugin is Contour's problem. Three mitigations are in place and each was
+a real freeze, not a precaution:
+
+- **Loading runs off the main actor, with a 20 s timeout.** Loading calls into
+  the plugin's own code, which can block indefinitely. On the main actor that is
+  a frozen app, and because chains are restored at launch, a saved chain
+  containing such a plugin froze on *every start* with no way in to remove it.
+- **Editor windows are kept, never rebuilt.** Closing one used to drop it, so
+  reopening asked the unit for a second `requestViewController` — which some
+  plugins do not survive.
+- **A chain whose plugins are all loaded is rebuilt synchronously.** Bypass and
+  reorder need no instantiation, and routing them through the async path let a
+  blocking plugin stall the rebuild, leaving the *previous* graph running. That
+  presents as a bypass that does nothing.
+
+**SoundID Reference cannot be isolated.** Measured: `isV3 = false`,
+`isSandboxSafe = false`. macOS only truly isolates AUv3 app extensions; a v2
+component accepts `.loadOutOfProcess` and is bridged in-process regardless, so
+the option reports success while changing nothing. It also schedules heavy work
+onto the host's main run loop — visible in a sample as
+`CFRunLoopDoSource0 → SoundID Reference Plugin → _platform_memmove` on the main
+thread — which no amount of care on our side prevents. Using its own Systemwide
+driver instead of hosting the plugin is a legitimate answer.
+
 ### Microphone TCC — the trap that cost an afternoon
 
 Reading BlackHole is reading an **input device**, and macOS gates every input
