@@ -177,6 +177,32 @@ for the BlackHole backend.
 `kAudioHardwarePropertyTapList` enumerates live taps, which is the recovery path
 if one ever is leaked.
 
+**A stereo tap is a mixdown of the system output device's whole bus**, and it
+costs exactly 6 dB on a 4-output interface. The mixdown averages the pairs that
+fold into each side — `L = 0.5·(ch1 + ch3)` — and ordinary stereo content lives
+only on 1/2, so half the sum is silence. BlackHole is 2 channels and never
+showed it. Measured, 250 Hz at −6.02 dBFS, median block peak:
+
+```
+system output 2 ch (BlackHole)    -6.02 dBFS   unity
+system output 4 ch (SSL 2+)      -12.04 dBFS   exactly 0.5
+```
+
+`TapSource.captureGain(systemOutputChannels:)` inverts it at the deinterleave,
+ahead of the meters, so the Input reading means the same thing on both backends
+— without which the Tap/BlackHole A/B the switch exists for is worthless. The
+divisor is the pair count, verified at 1 and 2 and **clamped to 2** rather than
+extrapolated: an 8-channel device might want 4, and guessing upward means a
+sudden +12 dB into headphones. The compensation follows the *system output*
+device, so a change of its channel count restarts the engine.
+
+**Measuring anything about the tap has two traps.** A player stays bound to
+whatever device it opened, so the system output must be set *before* it starts
+— two attempts here read `-inf` for BlackHole and made the tap look
+level-accurate. And mean level is useless: a device's first buffers hold stale
+memory far above full scale, and one such block moves an average by several dB.
+Median over blocks is stable to a hundredth.
+
 **Two aggregates cannot share a UID.** Creating a second one with
 `com.nahak.contour.aggregate` while the first is alive fails with `'nope'`
 (`kAudioHardwareIllegalOperationError`), so a backend switch must tear the old
