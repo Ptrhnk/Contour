@@ -97,6 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // outlive every window.
         ProcessInfo.processInfo.disableAutomaticTermination("Contour renders audio continuously")
         installStatusItemContextMenu()
+        // Warm the plugin list now rather than when the picker is first opened,
+        // where the wait is in the way.
+        engine.catalog.scanIfNeeded()
         engine.start()
     }
 

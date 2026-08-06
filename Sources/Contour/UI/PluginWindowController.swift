@@ -41,15 +41,17 @@ final class PluginWindowController {
                 window.center()
                 windows[item.id] = window
 
-                // Capture the plugin's own state when the editor closes, so
-                // whatever was tweaked survives a relaunch.
+                // The window is kept, not discarded. Closing it used to drop the
+                // entry, so reopening asked the unit for a *second* view
+                // controller — which some plugins do not survive; SoundID
+                // Reference hangs on the second open. Reopening now just orders
+                // the same window front again.
                 NotificationCenter.default.addObserver(
                     forName: NSWindow.willCloseNotification,
                     object: window,
                     queue: .main) { _ in
                         MainActor.assumeIsolated {
                             engine.capturePluginStates(for: chain)
-                            windows[item.id] = nil
                         }
                     }
 
@@ -57,6 +59,13 @@ final class PluginWindowController {
                 window.makeKeyAndOrderFront(nil)
             }
         }
+    }
+
+    /// Called when a plugin leaves the chain: only then is its editor really
+    /// finished with.
+    static func discard(itemID: UUID) {
+        windows[itemID]?.close()
+        windows[itemID] = nil
     }
 
     static func closeAll() {

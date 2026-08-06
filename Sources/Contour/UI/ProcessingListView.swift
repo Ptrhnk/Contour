@@ -150,11 +150,21 @@ struct ProcessingListView: View {
             TextField("Search", text: $search)
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.small)
-            if engine.catalog.isScanning {
-                HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                if engine.catalog.isScanning {
                     ProgressView().controlSize(.small)
-                    Text("Scanning…").font(.caption)
+                    Text("Scanning…").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("\(matching.count) of \(engine.catalog.effects.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer()
+                Button("Rescan") { engine.catalog.rescan() }
+                    .controlSize(.small)
+                    .disabled(engine.catalog.isScanning)
+                    .help("Re-read installed plugins. Needed after installing one, "
+                          + "and slow while the system is revalidating them.")
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
@@ -221,6 +231,7 @@ struct ProcessingListView: View {
 
     private func remove(_ item: ProcessingItem) {
         engine.capturePluginStates(for: chain)
+        PluginWindowController.discard(itemID: item.id)
         settings.wrappedValue.processing.removeAll { $0.id == item.id }
     }
 

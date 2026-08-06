@@ -57,23 +57,53 @@ final class AudioUnitCatalog {
 
     private(set) var effects: [AudioUnitDescriptor] = []
     private(set) var isScanning = false
+    /// How long the last scan took, so a slow one is visible rather than an
+    /// unexplained spinner.
+    private(set) var lastScanSeconds: Double?
 
     private static let log = Logger(subsystem: "com.nahak.contour", category: "aucatalog")
 
+    private let cacheURL: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let directory = base.appendingPathComponent("Contour", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("plugins.json")
+    }()
+
+    init() {
+        // Show the previous result immediately. The scan walks every component
+        // on disk and, while the system is revalidating them — after installing
+        // a plugin, say — it can take the better part of a minute.
+        if let data = try? Data(contentsOf: cacheURL),
+           let cached = try? JSONDecoder().decode([AudioUnitDescriptor].self, from: data) {
+            effects = cached
+        }
+    }
+
     func scanIfNeeded() {
-        guard effects.isEmpty, !isScanning else { return }
+        guard !isScanning else { return }
         rescan()
     }
 
     func rescan() {
         guard !isScanning else { return }
         isScanning = true
+        let started = Date()
         Task { @MainActor [weak self] in
             let found = await Self.scan()
             guard let self else { return }
             self.effects = found
             self.isScanning = false
-            Self.log.notice("found \(found.count, privacy: .public) effect audio units")
+            self.lastScanSeconds = Date().timeIntervalSince(started)
+            if let data = try? JSONEncoder().encode(found) {
+                try? data.write(to: self.cacheURL, options: .atomic)
+            }
+            Self.log.notice("""
+                found \(found.count, privacy: .public) effect audio units in \
+                \(self.lastScanSeconds ?? 0, privacy: .public)s
+                """)
         }
     }
 

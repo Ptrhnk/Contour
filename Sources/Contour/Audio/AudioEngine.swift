@@ -475,6 +475,7 @@ final class AudioEngine {
             var hosts = self.liveHosts[chain] ?? [:]
             var failure: String?
             let log = AudioEngine.log
+            log.notice("rebuilding \(chain.title, privacy: .public) graph")
 
             func host(for item: ProcessingItem) async -> PluginHost? {
                 guard let descriptor = item.descriptor else { return nil }
