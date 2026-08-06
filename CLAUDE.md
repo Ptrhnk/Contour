@@ -124,6 +124,43 @@ memset away.
 Streams are verified 32-bit float at aggregate creation and creation fails
 otherwise, so the render path can assume `Float`.
 
+### The tap backend: what was measured before writing any of it
+
+**A stuck system-wide mute cannot happen.** The spec calls that the worst
+possible failure, and it is why this step was left last. Measured, with a tone
+playing and a process holding a *running* muted global tap, killed with SIGKILL
+and no teardown at all:
+
+```
+baseline              peak 0.6103
+tap running + muted   peak 0.0000     the mute really does silence the original path
+after kill -9         peak 0.6103     audio came back by itself
+live taps             []              nothing leaked
+```
+
+**A tap only mutes while it is running.** Creating one and holding it does
+nothing audible; the mute engages when an aggregate carrying it in
+`kAudioAggregateDeviceTapListKey` is started. A first attempt that created a tap
+without running it looked exactly like "mute does not work".
+
+**`CATapDescription` wants audio process objects, not Unix PIDs.** Passing
+`getpid()` fails with `kAudioHardwareBadObjectError` ('!obj') and logs
+"can't find specified process object", which reads like a permissions problem
+and is not. Translate with `kAudioHardwarePropertyTranslatePIDToProcessObject`.
+
+**Swift sees the refined ObjC names**: `CATapDescription(__stereoGlobalTapButExcludeProcesses:)`,
+and the mute enum does not import — use `CATapMuteBehavior(rawValue: 1)` for
+`CATapMuted`.
+
+**The aggregate takes only the interface as a sub-device**, with the tap in
+`kAudioAggregateDeviceTapListKey` and `kAudioAggregateDeviceTapAutoStartKey`.
+No BlackHole anywhere. Input streams come back as `[interface inputs, tap]`, so
+the tap is *not* buffer zero — derive its index rather than assuming, exactly as
+for the BlackHole backend.
+
+`kAudioHardwarePropertyTapList` enumerates live taps, which is the recovery path
+if one ever is leaked.
+
 ### Hosting plugins: what cannot be worked around
 
 Plugins are hosted **in-process** deliberately (§6) — out-of-process isolation
