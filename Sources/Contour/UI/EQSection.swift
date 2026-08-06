@@ -1,5 +1,7 @@
+import AppKit
 import ContourDSP
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Curve plus numeric editing for the selected band.
 ///
@@ -11,6 +13,8 @@ struct EQSection: View {
 
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
+
+    @State private var transferMessage: String?
 
     private static let trimRange =
         Double(ChainSettings.trimRange.lowerBound)...Double(ChainSettings.trimRange.upperBound)
@@ -32,9 +36,17 @@ struct EQSection: View {
                         sampleRate: sampleRate)
                 .frame(height: 150)
                 .opacity(settings.eq.isEnabled ? 1 : 0.4)
+                .onDrop(of: [.fileURL, .plainText], isTargeted: nil, perform: handleDrop)
 
             bandEditor
             trimRow
+
+            if let transferMessage {
+                Text(transferMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -55,6 +67,22 @@ struct EQSection: View {
             .controlSize(.small)
             .disabled(settings.eq.bands.allSatisfy { $0.gainDB == 0 })
             .help("Set every band's gain to 0 dB. Frequencies and Q are kept.")
+            Menu {
+                Button("Paste AutoEq Text") { importFromClipboard() }
+                Button("Open AutoEq File…") { importFromFile() }
+                Divider()
+                Button("Copy as AutoEq Text") { exportToClipboard() }
+                Button("Save AutoEq File…") { exportToFile() }
+            } label: {
+                Image(systemName: "square.and.arrow.down")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .controlSize(.small)
+            .help("Import or export the curve as AutoEq ParametricEQ.txt. "
+                  + "You can also drop a file or text onto the curve.")
+
             Toggle("Adapt. Q", isOn: $settings.eq.adaptiveQ)
                 .toggleStyle(.checkbox)
                 .font(.caption)
@@ -183,6 +211,88 @@ struct EQSection: View {
             .font(.caption.monospacedDigit())
             .multilineTextAlignment(.trailing)
             .frame(width: width)
+    }
+
+    // MARK: - AutoEq text
+
+    /// The curve alone, in the one format that transfers between machines.
+    /// A Contour preset carries opaque plugin state and does not (§6a).
+    private func apply(_ text: String) {
+        do {
+            let imported = try AutoEqPreset.parse(text)
+            settings.eq.bands = AutoEqPreset.bands(from: imported)
+            settings.eq.isEnabled = true
+            // The file states its own preamp, so auto-trim would fight it.
+            settings.autoTrim = false
+            settings.inputTrimDB = Float(min(max(imported.preampDB,
+                                                 Double(ChainSettings.trimRange.lowerBound)), 0))
+            transferMessage = imported.warnings.isEmpty
+                ? "Imported \(imported.bands.count) filters, preamp "
+                    + String(format: "%.1f dB.", imported.preampDB)
+                : imported.warnings.joined(separator: " ")
+        } catch {
+            transferMessage = error.localizedDescription
+        }
+    }
+
+    private func importFromClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+            transferMessage = "The clipboard has no text."
+            return
+        }
+        apply(text)
+    }
+
+    private func importFromFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .text]
+        panel.allowsOtherFileTypes = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url,
+              let text = try? String(contentsOf: url, encoding: .utf8)
+        else { return }
+        apply(text)
+    }
+
+    private var exportText: String {
+        AutoEqPreset.export(bands: settings.eq.bands, preampDB: Double(settings.inputTrimDB))
+    }
+
+    private func exportToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(exportText, forType: .string)
+        transferMessage = "Copied the curve as AutoEq text."
+    }
+
+    private func exportToFile() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "ParametricEQ.txt"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try exportText.write(to: url, atomically: true, encoding: .utf8)
+            transferMessage = "Saved."
+        } catch {
+            transferMessage = error.localizedDescription
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+                Task { @MainActor in apply(text) }
+            }
+            return true
+        }
+        _ = provider.loadObject(ofClass: NSString.self) { text, _ in
+            guard let text = text as? String else { return }
+            Task { @MainActor in apply(text) }
+        }
+        return true
     }
 
     // MARK: - Trim
