@@ -53,6 +53,19 @@ struct EQWindowView: View {
                 set: { settings.wrappedValue.eq.bands[safe: selectedBand] = $0 })
     }
 
+    /// Master bypass greys the whole signal path, matching what switching the EQ
+    /// off already does — the difference being that bypass leaves it *editable*.
+    /// You are usually drawing the change you want to hear on the way back, and
+    /// a control that cannot be touched during the comparison gets in the way.
+    private var pathOpacity: Double { engine.isBypassed ? 0.4 : 1 }
+
+    /// One value rather than two stacked modifiers: SwiftUI multiplies nested
+    /// opacities, so an EQ that is both off and bypassed would fade to 0.16 and
+    /// read as broken rather than idle.
+    private var eqOpacity: Double {
+        settings.wrappedValue.eq.isEnabled && !engine.isBypassed ? 1 : 0.4
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             toolbar
@@ -71,16 +84,17 @@ struct EQWindowView: View {
                         handleRadius: 13)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .disabled(!settings.wrappedValue.eq.isEnabled)
-                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+                .opacity(eqOpacity)
 
             bandStrip
                 .disabled(!settings.wrappedValue.eq.isEnabled)
-                .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+                .opacity(eqOpacity)
             Divider()
 
             // Below the EQ: the list is the signal path, and reading it under
             // the thing being edited matches the order audio actually travels.
             ProcessingListView(engine: engine, chain: shownChain)
+                .opacity(pathOpacity)
 
             Divider()
             levels

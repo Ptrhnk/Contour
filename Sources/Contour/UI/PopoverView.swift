@@ -384,9 +384,13 @@ private struct ChainSection: View {
             // The EQ comes first because it is what gets touched. The plugin
             // order rarely changes once set, so the list sits underneath rather
             // than pushing the curve down the panel.
+            // Greyed while the master bypass is on, but still editable: the
+            // usual reason to bypass is to decide what to change next.
             EQSection(settings: settings, sampleRate: engine.eqSampleRate)
+                .opacity(engine.isBypassed ? 0.4 : 1)
             Divider()
             ProcessingListView(engine: engine, chain: chain)
+                .opacity(engine.isBypassed ? 0.4 : 1)
         }
         .opacity(isActive ? 1 : 0.6)
     }
