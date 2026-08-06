@@ -301,6 +301,19 @@ struct PopoverView: View {
 
     // MARK: - Footer
 
+    private var bypassToggle: some View {
+        Toggle("Bypass", isOn: $engine.isBypassed)
+            .toggleStyle(.button)
+            .tint(.orange)
+            .keyboardShortcut("b", modifiers: [])
+            .disabled(!engine.status.isRunning)
+            .help("Both chains fall back to the dry signal, crossfaded so the "
+                  + "switch does not click. Trim and output gain still apply, so "
+                  + "this compares the processing rather than the volume. Plugins "
+                  + "keep running, so switching back is instant. Not remembered "
+                  + "across launches.")
+    }
+
     private var footer: some View {
         HStack {
             if engine.status.isRunning {
@@ -309,6 +322,8 @@ struct PopoverView: View {
                 Button("Start") { engine.start() }
             }
             Button("Rescan") { engine.refreshEnvironment() }
+            Spacer()
+            bypassToggle
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")

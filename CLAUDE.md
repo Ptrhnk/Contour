@@ -443,6 +443,27 @@ so an undetected rate change detunes every band. A drift backstop in the meter
 poll compares the aggregate's actual rate against the engine's and rebuilds if
 they diverge, in case a notification is ever missed again.
 
+### Master bypass is a crossfade, and the processing keeps running
+
+Both chains fall back to the dry capture, mixed over one buffer (10.7 ms at 512
+frames and 48 kHz) rather than switched — a hard switch clicks. The fade is
+**linear, not equal-power**: the two sides are the same signal, one processed,
+so they are correlated and an equal-power curve would bulge ~3 dB through the
+middle, reading as a bump rather than a comparison.
+
+The EQ and every plugin go on rendering while bypassed. That spends CPU doing
+nothing audible, deliberately: a plugin holding reverb tails or adaptive state
+is still where it was when the switch flips back, so the A/B is instant in both
+directions instead of only one.
+
+The dry copy is taken **after the input trim and before the processing list**,
+and output gain applies to both sides. Same reasoning as `effectiveTrimDB`: a
+bypass that is louder always wins, which is the one thing an A/B control must
+not do.
+
+Not persisted. Starting up bypassed, with the EQ and plugins visibly configured
+and doing nothing, is a puzzle nobody needs.
+
 ### Chain activity on a stereo-only device
 
 `isChainActive(_:)` is the single source of truth, read by both the audio thread

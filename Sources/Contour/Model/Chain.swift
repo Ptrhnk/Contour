@@ -52,6 +52,10 @@ struct ChainParameters: Equatable, BitwiseCopyable {
     /// Linear. This is the control that removes the hardware knob-turning:
     /// set once per destination so switching needs no level change.
     var outputGain: Float = 1
+    /// Master bypass, as a crossfade amount: 1 processed, 0 dry. Input trim and
+    /// output gain still apply either way, so the comparison is between the
+    /// processing and nothing, not between two different volumes.
+    var processedMix: Float = 1
 }
 
 struct EngineParameters: Equatable, BitwiseCopyable {

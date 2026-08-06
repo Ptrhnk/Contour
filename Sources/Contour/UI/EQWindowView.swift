@@ -154,6 +154,21 @@ struct EQWindowView: View {
 
             Spacer()
 
+            // Master bypass belongs here as well as in the popover: this is
+            // where the curve is being drawn, so this is where "what does it
+            // actually sound like without any of it" gets asked.
+            Toggle("Bypass", isOn: $engine.isBypassed)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .tint(.orange)
+                .keyboardShortcut("b", modifiers: [])
+                .disabled(!engine.status.isRunning)
+                .help("Both chains fall back to the dry signal, crossfaded so the "
+                      + "switch does not click. Trim and output gain still apply, "
+                      + "so this compares the processing rather than the volume.")
+
+            Divider().frame(height: 16)
+
             Button {
                 engine.undo()
             } label: {

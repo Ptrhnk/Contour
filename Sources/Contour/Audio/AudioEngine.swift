@@ -98,6 +98,23 @@ final class AudioEngine {
 
     // MARK: - User-facing settings
 
+    /// Master bypass: both chains fall back to the dry capture, crossfaded over
+    /// one buffer so the switch does not click.
+    ///
+    /// The EQ and every plugin keep rendering while this is on. That costs the
+    /// CPU it costs — the point is that a plugin holding reverb tails or
+    /// adaptive state is still where it was when the switch flips back, so the
+    /// comparison is instant in both directions rather than only one.
+    ///
+    /// Deliberately **not persisted**. Starting up bypassed, with the EQ and
+    /// plugins visibly configured and doing nothing, is a puzzle nobody needs.
+    var isBypassed = false {
+        didSet {
+            guard isBypassed != oldValue else { return }
+            publishParameters()
+        }
+    }
+
     /// Changing this rebuilds the whole device path, so it goes through the same
     /// coalesced restart an interface change does.
     var backend: Backend = .default {
@@ -213,6 +230,9 @@ final class AudioEngine {
     private let gainRampB = GainRamp()
     private let makeupRampA = GainRamp()
     private let makeupRampB = GainRamp()
+    private let bypassA = CrossfadeRamp()
+    private let bypassB = CrossfadeRamp()
+    private let dry = DryScratch(capacity: AggregateRenderer.scratchCapacity)
 
     let presets = PresetStore()
     let catalog = AudioUnitCatalog()
@@ -786,15 +806,18 @@ final class AudioEngine {
     }
 
     private func publishParameters() {
+        let mix: Float = isBypassed ? 0 : 1
         parameters.publish(EngineParameters(
             a: ChainParameters(isActive: isChainActive(.a),
                                eqMakeup: Decibels.toLinear(loudnessMatchDB(for: .a)),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .a)),
-                               outputGain: Decibels.toLinear(chainA.outputGainDB)),
+                               outputGain: Decibels.toLinear(chainA.outputGainDB),
+                               processedMix: mix),
             b: ChainParameters(isActive: isChainActive(.b),
                                eqMakeup: Decibels.toLinear(loudnessMatchDB(for: .b)),
                                inputTrim: Decibels.toLinear(effectiveTrimDB(for: .b)),
-                               outputGain: Decibels.toLinear(chainB.outputGainDB))))
+                               outputGain: Decibels.toLinear(chainB.outputGainDB),
+                               processedMix: mix)))
     }
 
     /// Coefficients depend on sample rate, so this is recomputed whenever the
@@ -820,6 +843,9 @@ final class AudioEngine {
         let gainRampB = self.gainRampB
         let makeupRampA = self.makeupRampA
         let makeupRampB = self.makeupRampB
+        let bypassA = self.bypassA
+        let bypassB = self.bypassB
+        let dry = self.dry
         return { buffers in
             let values = parameters.current()
             let frames = buffers.frameCount
@@ -830,11 +856,19 @@ final class AudioEngine {
                 memcpy(buffers.chainAR, buffers.inputR, bytes)
                 trimRampA.apply(target: values.a.inputTrim,
                                 left: buffers.chainAL, right: buffers.chainAR, frames: frames)
+                // The dry copy is taken after the trim and before the processing
+                // list, so bypassing compares the processing itself rather than
+                // handing the win to whichever side is louder.
+                memcpy(dry.left, buffers.chainAL, bytes)
+                memcpy(dry.right, buffers.chainAR, bytes)
                 eqA.process(left: buffers.chainAL, right: buffers.chainAR,
                              frames: frames, timestamp: buffers.timestamp)
                 makeupRampA.apply(target: values.a.eqMakeup,
                                   left: buffers.chainAL, right: buffers.chainAR,
                                   frames: frames)
+                bypassA.apply(target: values.a.processedMix,
+                              wetL: buffers.chainAL, wetR: buffers.chainAR,
+                              dryL: dry.left, dryR: dry.right, frames: frames)
                 gainRampA.apply(target: values.a.outputGain,
                                 left: buffers.chainAL, right: buffers.chainAR, frames: frames)
             }
@@ -843,11 +877,16 @@ final class AudioEngine {
                 memcpy(buffers.chainBR, buffers.inputR, bytes)
                 trimRampB.apply(target: values.b.inputTrim,
                                 left: buffers.chainBL, right: buffers.chainBR, frames: frames)
+                memcpy(dry.left, buffers.chainBL, bytes)
+                memcpy(dry.right, buffers.chainBR, bytes)
                 eqB.process(left: buffers.chainBL, right: buffers.chainBR,
                              frames: frames, timestamp: buffers.timestamp)
                 makeupRampB.apply(target: values.b.eqMakeup,
                                   left: buffers.chainBL, right: buffers.chainBR,
                                   frames: frames)
+                bypassB.apply(target: values.b.processedMix,
+                              wetL: buffers.chainBL, wetR: buffers.chainBR,
+                              dryL: dry.left, dryR: dry.right, frames: frames)
                 gainRampB.apply(target: values.b.outputGain,
                                 left: buffers.chainBL, right: buffers.chainBR, frames: frames)
             }
