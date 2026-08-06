@@ -24,6 +24,10 @@ final class AggregateRenderer {
         let pairA: ChannelPairSlot?
         let pairB: ChannelPairSlot?
         let render: RenderBlock
+        /// Applied as the capture pair is deinterleaved, so everything
+        /// downstream — meters included — sees a level-matched signal whichever
+        /// backend produced it. See `AggregateRenderer.captureGain`.
+        var captureGain: Float
 
         // Word-sized plain stores from the realtime thread, read from the main
         // thread for display only. A torn read of a meter is not worth a lock.
@@ -65,7 +69,9 @@ final class AggregateRenderer {
              inputPair: ChannelPairSlot,
              pairA: ChannelPairSlot?,
              pairB: ChannelPairSlot?,
+             captureGain: Float,
              render: @escaping RenderBlock) {
+            self.captureGain = captureGain
             let rate = sampleRate > 0 ? sampleRate : 44_100
             minimumMuteFrames = Int(rate * 0.10)
             maximumMuteFrames = Int(rate * 2.0)
@@ -126,11 +132,18 @@ final class AggregateRenderer {
     private(set) var outputLatencyFrames: Int = 0
     private(set) var layoutDescription: String
 
+    /// Linear gain applied to the capture pair. 1 for BlackHole, which hands
+    /// back exactly what the system wrote; more than that for a tap, which
+    /// arrives attenuated by its own mixdown.
+    let captureGain: Float
+
     init(aggregate: AggregateDevice,
          chainAPairIndex: Int,
          chainBPairIndex: Int?,
+         captureGain: Float = 1,
          source: String) throws {
         self.aggregate = aggregate
+        self.captureGain = captureGain
 
         guard let inputPair = aggregate.captureInputPair else {
             throw CA.Failure(status: nil,
@@ -151,7 +164,8 @@ final class AggregateRenderer {
         outputLatencyFrames = aggregate.outputLatencyFrames
 
         layoutDescription = """
-            source=\(source) aggregate=\(aggregate.id) sr=\(aggregate.sampleRate) \
+            source=\(source) captureGain=\(captureGain) \
+            aggregate=\(aggregate.id) sr=\(aggregate.sampleRate) \
             bufferFrames=\(aggregate.bufferFrameSize)
             interface=\(aggregate.interface.name) in=\(aggregate.interface.inputChannels) \
             out=\(aggregate.interface.outputChannels)
@@ -173,6 +187,7 @@ final class AggregateRenderer {
                                 inputPair: inputPair,
                                 pairA: pairA,
                                 pairB: pairB,
+                                captureGain: captureGain,
                                 render: render)
         self.state = state
 
@@ -296,9 +311,12 @@ final class AggregateRenderer {
            Int(input[slot.buffer].mDataByteSize)
             >= frames * Int(input[slot.buffer].mNumberChannels) * MemoryLayout<Float>.size {
             let src = raw.assumingMemoryBound(to: Float.self) + slot.leftOffset
-            vDSP_vsmul(src, vDSP_Stride(slot.stride), &unity,
+            // The deinterleave already costs a multiply, so level-matching the
+            // capture is free here.
+            var gain = state.captureGain
+            vDSP_vsmul(src, vDSP_Stride(slot.stride), &gain,
                        state.inL, 1, vDSP_Length(frames))
-            vDSP_vsmul(src + 1, vDSP_Stride(slot.stride), &unity,
+            vDSP_vsmul(src + 1, vDSP_Stride(slot.stride), &gain,
                        state.inR, 1, vDSP_Length(frames))
         } else {
             vDSP_vclr(state.inL, 1, vDSP_Length(frames))

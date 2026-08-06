@@ -1038,10 +1038,24 @@ final class AudioEngine {
     private func handleHardwareChange() {
         let previousInterfaceUID = interface?.uid
         let previousSampleRate = interface?.sampleRate
+        let previousSystemOutputChannels = systemOutput?.outputChannels
         refreshEnvironment()
 
         switch status {
         case .running:
+            // The tap's mixdown compensation is derived from the system output
+            // device's channel count, so switching from a 4-channel interface to
+            // stereo headphones changes it by 6 dB. Rebuild rather than run on a
+            // gain computed for a device that is no longer there.
+            if backend == .tap, systemOutput?.outputChannels != previousSystemOutputChannels {
+                Self.log.notice("""
+                    system output width changed: \
+                    \(previousSystemOutputChannels ?? -1, privacy: .public) -> \
+                    \(self.systemOutput?.outputChannels ?? -1, privacy: .public) ch — restart
+                    """)
+                restart()
+                return
+            }
             // Interface gone or re-clocked: the aggregate is stale either way.
             if interface?.uid != previousInterfaceUID || interface?.sampleRate != previousSampleRate {
                 Self.log.notice("""

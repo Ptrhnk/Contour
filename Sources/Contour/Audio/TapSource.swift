@@ -30,6 +30,31 @@ final class TapSource: AudioSource {
         fallbackFormat = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
     }
 
+    /// A stereo tap is a **mixdown of the system output device's whole bus**, and
+    /// the mixdown averages the pairs that fold into each side. Against a
+    /// 4-channel device it computes `L = 0.5·(ch1 + ch3)`; ordinary stereo
+    /// content lives only on 1/2, so half the sum is silence and the capture
+    /// arrives exactly 6.02 dB down.
+    ///
+    /// Measured with a 250 Hz tone at −6.02 dBFS, median block peak:
+    ///
+    /// ```
+    /// system output 2 ch (BlackHole)   −6.02 dBFS   unity
+    /// system output 4 ch (SSL 2+)     −12.04 dBFS   exactly 0.5
+    /// ```
+    ///
+    /// Without this the level jumps 6 dB when the Capture switch is flipped,
+    /// which makes the Tap/BlackHole A/B worthless — the one comparison the
+    /// backend switch exists to enable.
+    ///
+    /// The divisor is the number of pairs, verified at 1 and 2. It is
+    /// **clamped to 2** rather than extrapolated: an 8-channel device might want
+    /// 4, but guessing wrong upward means a sudden +12 dB into headphones, and
+    /// undercompensating is merely quiet.
+    static func captureGain(systemOutputChannels channels: Int) -> Float {
+        Float(min(max(channels / 2, 1), 2))
+    }
+
     var format: AVAudioFormat { renderer?.format ?? fallbackFormat }
     var outputLatencyFrames: Int { renderer?.outputLatencyFrames ?? 0 }
     var currentSampleRate: Double { renderer?.currentSampleRate ?? 0 }
@@ -51,10 +76,18 @@ final class TapSource: AudioSource {
             throw error
         }
         do {
-            let renderer = try AggregateRenderer(aggregate: aggregate,
-                                                 chainAPairIndex: chainAPairIndex,
-                                                 chainBPairIndex: chainBPairIndex,
-                                                 source: "tap \(tap.id)")
+            // Read at start: the tap mixes down whatever the system output
+            // device presents, so the compensation follows that device, not the
+            // one Contour renders to.
+            let systemOutput = AudioDevices.defaultOutputDevice()
+            let renderer = try AggregateRenderer(
+                aggregate: aggregate,
+                chainAPairIndex: chainAPairIndex,
+                chainBPairIndex: chainBPairIndex,
+                captureGain: Self.captureGain(
+                    systemOutputChannels: systemOutput?.outputChannels ?? 2),
+                source: "tap \(tap.id) systemOutput "
+                    + "\(systemOutput?.name ?? "unknown") \(systemOutput?.outputChannels ?? 0)ch")
             try renderer.start(render)
             self.renderer = renderer
         } catch {
