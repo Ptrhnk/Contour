@@ -301,19 +301,6 @@ struct PopoverView: View {
 
     // MARK: - Footer
 
-    private var bypassToggle: some View {
-        Toggle("Bypass", isOn: $engine.isBypassed)
-            .toggleStyle(.button)
-            .tint(.orange)
-            .keyboardShortcut("b", modifiers: [])
-            .disabled(!engine.status.isRunning)
-            .help("Both chains fall back to the dry signal, crossfaded so the "
-                  + "switch does not click. Trim and output gain still apply, so "
-                  + "this compares the processing rather than the volume. Plugins "
-                  + "keep running, so switching back is instant. Not remembered "
-                  + "across launches.")
-    }
-
     private var footer: some View {
         HStack {
             if engine.status.isRunning {
@@ -325,8 +312,6 @@ struct PopoverView: View {
             // hardware listeners and by opening this popover, and the plugin
             // scan at launch covers the only case that matters — installing an
             // Audio Unit is already a relaunch-shaped event.
-            Spacer()
-            bypassToggle
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
@@ -350,18 +335,48 @@ private struct ChainSection: View {
         chain == .a ? $engine.chainA : $engine.chainB
     }
 
+    /// Chain name, its output pair, and the master bypass on the right.
+    ///
+    /// The bypass lives on this line rather than in the footer because this is
+    /// the line you are looking at while listening. It is still the *master*
+    /// bypass — both chains go dry — which is unambiguous enough here, since
+    /// only one chain is ever on screen.
+    private var chainHeader: some View {
+        HStack(spacing: 6) {
+            Image(systemName: engine.symbol(for: chain))
+                .foregroundStyle(isActive ? .primary : .secondary)
+            Text(engine.title(for: chain)).font(.callout.weight(.medium))
+            if engine.supportsTwoChains {
+                Text(chain.outputPairLabel).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !isActive { Text("off").font(.caption).foregroundStyle(.secondary) }
+            bypassToggle
+        }
+    }
+
+    /// Built separately: inlined in the header `HStack`, the concatenated help
+    /// string pushes the type checker past its limit.
+    private var bypassToggle: some View {
+        Toggle("Bypass", isOn: $engine.isBypassed)
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .tint(.orange)
+            .keyboardShortcut("b", modifiers: [])
+            .disabled(!engine.status.isRunning)
+            .help(Self.bypassHelp)
+    }
+
+    private static let bypassHelp = """
+        Both chains fall back to the dry signal, crossfaded so the switch does \
+        not click. Trim and output gain still apply, so this compares the \
+        processing rather than the volume. Plugins keep running, so switching \
+        back is instant. Not remembered across launches.
+        """
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: engine.symbol(for: chain))
-                    .foregroundStyle(isActive ? .primary : .secondary)
-                Text(engine.title(for: chain)).font(.callout.weight(.medium))
-                if engine.supportsTwoChains {
-                    Text(chain.outputPairLabel).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if !isActive { Text("off").font(.caption).foregroundStyle(.secondary) }
-            }
+            chainHeader
 
             PresetBar(engine: engine, chain: chain)
 
