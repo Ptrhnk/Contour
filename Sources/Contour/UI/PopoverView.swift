@@ -327,9 +327,12 @@ private struct ChainSection: View {
             }
 
             Divider()
-            ProcessingListView(engine: engine, chain: chain)
-            Divider()
+            // The EQ comes first because it is what gets touched. The plugin
+            // order rarely changes once set, so the list sits underneath rather
+            // than pushing the curve down the panel.
             EQSection(settings: settings, sampleRate: engine.eqSampleRate)
+            Divider()
+            ProcessingListView(engine: engine, chain: chain)
         }
         .opacity(isActive ? 1 : 0.6)
     }
