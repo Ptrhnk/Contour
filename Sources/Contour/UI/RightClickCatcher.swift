@@ -37,8 +37,11 @@ private final class CatcherView: NSView {
         switch event.type {
         case .rightMouseDown, .rightMouseUp, .rightMouseDragged:
             return super.hitTest(point)
-        case .leftMouseDown, .leftMouseUp where event.modifierFlags.contains(.control):
-            return super.hitTest(point)
+        case .leftMouseDown, .leftMouseUp:
+            // Written out rather than as `case .a, .b where ...`, where the
+            // clause binds only to the last pattern — which made this swallow
+            // every ordinary left click instead of passing it through.
+            return event.modifierFlags.contains(.control) ? super.hitTest(point) : nil
         default:
             return nil
         }
