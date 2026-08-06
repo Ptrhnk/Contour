@@ -189,12 +189,19 @@ system output 4 ch (SSL 2+)      -12.04 dBFS   exactly 0.5
 ```
 
 `TapSource.captureGain(systemOutputChannels:)` inverts it at the deinterleave,
-ahead of the meters, so the Input reading means the same thing on both backends
-— without which the Tap/BlackHole A/B the switch exists for is worthless. The
-divisor is the pair count, verified at 1 and 2 and **clamped to 2** rather than
-extrapolated: an 8-channel device might want 4, and guessing upward means a
-sudden +12 dB into headphones. The compensation follows the *system output*
-device, so a change of its channel count restarts the engine.
+ahead of the meters, so the Input reading means much the same thing on both
+backends — without which the Tap/BlackHole A/B the switch exists for is
+worthless. The divisor is the pair count, verified at 1 and 2 and **clamped to
+2** rather than extrapolated: an 8-channel device might want 4, and guessing
+upward means a sudden +12 dB into headphones. The compensation follows the
+*system output* device, so a change of its channel count restarts the engine.
+
+`headroomDB` holds it 1 dB below the exact inverse, so restoring the loss does
+not put material mastered near 0 dBFS onto the converter's ceiling with the EQ
+still to come. That is a preference, not a measurement, and it costs exactly
+that much of the level match — applied only where there is a mixdown to undo,
+since a 2-channel system output loses nothing and pulling it down would
+attenuate a capture that was already unity.
 
 **Measuring anything about the tap has two traps.** A player stays bound to
 whatever device it opened, so the system output must be set *before* it starts

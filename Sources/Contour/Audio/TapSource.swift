@@ -52,8 +52,19 @@ final class TapSource: AudioSource {
     /// 4, but guessing wrong upward means a sudden +12 dB into headphones, and
     /// undercompensating is merely quiet.
     static func captureGain(systemOutputChannels channels: Int) -> Float {
-        Float(min(max(channels / 2, 1), 2))
+        let mixdown = Float(min(max(channels / 2, 1), 2))
+        // Only where there is something to undo. A 2-channel system output loses
+        // nothing, and pulling that down would be attenuating a capture that was
+        // already unity.
+        guard mixdown > 1 else { return 1 }
+        return mixdown * pow(10, -headroomDB / 20)
     }
+
+    /// Held back from the exact inverse. Restoring the full 6 dB puts material
+    /// mastered near 0 dBFS straight onto the converter's ceiling, with the EQ
+    /// still to come. Chosen by ear, not measured — it is a preference, and the
+    /// cost is that the Tap/BlackHole A/B is this much off rather than matched.
+    static let headroomDB: Float = 1
 
     var format: AVAudioFormat { renderer?.format ?? fallbackFormat }
     var outputLatencyFrames: Int { renderer?.outputLatencyFrames ?? 0 }
