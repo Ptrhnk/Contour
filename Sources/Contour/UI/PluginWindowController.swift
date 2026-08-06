@@ -1,76 +1,93 @@
 import AppKit
 import AVFoundation
 import CoreAudioKit
+import Observation
 import SwiftUI
 import os
 
-/// Hosts a plugin's own interface in a separate `NSWindow`, so the popover can
-/// close without taking the editor with it (§6).
+/// Hosts plugin editors in their own windows, so the popover can close without
+/// taking them with it (§6).
+///
+/// Windows are kept once created rather than rebuilt. Closing one used to drop
+/// it, so reopening asked the unit for a *second* view controller — which some
+/// plugins do not survive; SoundID Reference hangs on the second open.
 @MainActor
+@Observable
 final class PluginWindowController {
 
-    private static var windows: [UUID: NSWindow] = [:]
+    static let shared = PluginWindowController()
+
+    /// Which editors are on screen, so the button that opens them can show it.
+    private(set) var openItems: Set<UUID> = []
+
+    @ObservationIgnored private var windows: [UUID: NSWindow] = [:]
+    @ObservationIgnored private var observers: [UUID: any NSObjectProtocol] = [:]
+
     private static let log = Logger(subsystem: "com.nahak.contour", category: "pluginwindow")
 
-    static func show(item: ProcessingItem, chain: Chain, engine: AudioEngine) {
+    func isOpen(_ itemID: UUID) -> Bool { openItems.contains(itemID) }
+
+    /// Open, or close it again if it is already showing.
+    func toggle(item: ProcessingItem, chain: Chain, engine: AudioEngine) {
+        if isOpen(item.id) {
+            windows[item.id]?.close()
+            openItems.remove(item.id)
+        } else {
+            show(item: item, chain: chain, engine: engine)
+        }
+    }
+
+    func show(item: ProcessingItem, chain: Chain, engine: AudioEngine) {
         if let existing = windows[item.id] {
             NSApp.activate(ignoringOtherApps: true)
             existing.makeKeyAndOrderFront(nil)
+            openItems.insert(item.id)
             return
         }
         guard let host = engine.pluginHost(for: item, chain: chain) else {
-            log.error("no live host for \(item.title, privacy: .public)")
+            Self.log.error("no live host for \(item.title, privacy: .public)")
             return
         }
 
-        host.audioUnit.requestViewController { controller in
+        host.audioUnit.requestViewController { [weak self] controller in
             MainActor.assumeIsolated {
-                let content: NSViewController
-                if let controller {
-                    content = controller
-                } else {
-                    // Plenty of units have no custom view. A generic parameter
-                    // list is still better than nothing.
-                    content = NSHostingController(
-                        rootView: GenericPluginView(host: host))
-                }
+                guard let self else { return }
+                let content = controller
+                    ?? NSHostingController(rootView: GenericPluginView(host: host))
                 let window = NSWindow(contentViewController: content)
                 window.title = item.title
                 window.styleMask = [.titled, .closable, .resizable]
                 window.isReleasedWhenClosed = false
                 window.center()
-                windows[item.id] = window
+                self.windows[item.id] = window
 
-                // The window is kept, not discarded. Closing it used to drop the
-                // entry, so reopening asked the unit for a *second* view
-                // controller — which some plugins do not survive; SoundID
-                // Reference hangs on the second open. Reopening now just orders
-                // the same window front again.
-                NotificationCenter.default.addObserver(
+                self.observers[item.id] = NotificationCenter.default.addObserver(
                     forName: NSWindow.willCloseNotification,
                     object: window,
                     queue: .main) { _ in
                         MainActor.assumeIsolated {
+                            // A plugin's settings live inside it until asked for.
                             engine.capturePluginStates(for: chain)
+                            self.openItems.remove(item.id)
                         }
                     }
 
                 NSApp.activate(ignoringOtherApps: true)
                 window.makeKeyAndOrderFront(nil)
+                self.openItems.insert(item.id)
             }
         }
     }
 
-    /// Called when a plugin leaves the chain: only then is its editor really
-    /// finished with.
-    static func discard(itemID: UUID) {
+    /// Called when a plugin leaves the chain: only then is its editor finished
+    /// with, and only then may the view controller be released.
+    func discard(itemID: UUID) {
         windows[itemID]?.close()
         windows[itemID] = nil
-    }
-
-    static func closeAll() {
-        for window in windows.values { window.close() }
-        windows.removeAll()
+        if let observer = observers.removeValue(forKey: itemID) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        openItems.remove(itemID)
     }
 }
 

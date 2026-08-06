@@ -86,12 +86,16 @@ struct ProcessingListView: View {
 
             if !item.isEQ {
                 Button {
-                    PluginWindowController.show(item: item, chain: chain, engine: engine)
+                    PluginWindowController.shared.toggle(item: item, chain: chain, engine: engine)
                 } label: {
                     Image(systemName: "slider.horizontal.3")
+                        .foregroundStyle(PluginWindowController.shared.isOpen(item.id)
+                                         ? Color.accentColor : .primary)
                 }
                 .buttonStyle(.plain)
-                .help("Open the plugin's own interface")
+                .help(PluginWindowController.shared.isOpen(item.id)
+                      ? "Close the plugin's interface"
+                      : "Open the plugin's interface")
 
                 Button {
                     remove(item)
@@ -231,7 +235,7 @@ struct ProcessingListView: View {
 
     private func remove(_ item: ProcessingItem) {
         engine.capturePluginStates(for: chain)
-        PluginWindowController.discard(itemID: item.id)
+        PluginWindowController.shared.discard(itemID: item.id)
         settings.wrappedValue.processing.removeAll { $0.id == item.id }
     }
 

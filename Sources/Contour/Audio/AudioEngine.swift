@@ -534,10 +534,11 @@ final class AudioEngine {
             self.eq(for: chain).graphs.publish(graph)
             self.pluginLatencyFrames[chain] = graph.latencyFrames
             self.pluginFailure = failure
+            let names = (before.map { "\($0.descriptor.name) (pre)" }
+                         + after.map { "\($0.descriptor.name) (post)" })
+            let listed = names.isEmpty ? "EQ only" : names.joined(separator: ", ")
             Self.log.notice("""
-                \(chain.title, privacy: .public) graph: \
-                \(before.count, privacy: .public) before EQ, \
-                \(after.count, privacy: .public) after
+                \(chain.title, privacy: .public) graph: \(listed, privacy: .public)
                 """)
         }
     }
