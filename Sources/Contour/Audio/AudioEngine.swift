@@ -624,9 +624,13 @@ final class AudioEngine {
     /// Trim actually sent to the audio thread. Auto-trim is derived here rather
     /// than written back into `inputTrimDB`, which would recurse through the
     /// `didSet` that triggered it and would destroy the manual value.
+    /// Deliberately independent of whether the EQ is switched on. Letting the
+    /// trim jump back to zero when the EQ is bypassed makes the bypassed path
+    /// louder, and a louder A/B always wins — which is the exact comparison this
+    /// control exists to keep honest (§3.3).
     func effectiveTrimDB(for chain: Chain) -> Float {
         let settings = settings(for: chain)
-        guard settings.autoTrim, settings.eq.isEnabled else { return settings.inputTrimDB }
+        guard settings.autoTrim else { return settings.inputTrimDB }
         let boost = EQCurveCache.maximumBoostDB(bands: settings.eq.bands,
                                                 adaptiveQ: settings.eq.adaptiveQ,
                                                 sampleRate: eqSampleRate)

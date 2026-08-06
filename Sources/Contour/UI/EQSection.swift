@@ -37,8 +37,11 @@ struct EQSection: View {
                 .frame(height: 150)
                 .opacity(settings.eq.isEnabled ? 1 : 0.4)
                 .onDrop(of: [.fileURL, .plainText], isTargeted: nil, perform: handleDrop)
+                .disabled(!settings.eq.isEnabled)
 
             bandEditor
+                .disabled(!settings.eq.isEnabled)
+                .opacity(settings.eq.isEnabled ? 1 : 0.4)
             trimRow
 
             if let transferMessage {
@@ -298,8 +301,10 @@ struct EQSection: View {
     // MARK: - Trim
 
     /// Shown value: the derived one when auto is on, the manual one otherwise.
+    /// Independent of the EQ's on/off state, so toggling the EQ does not change
+    /// the level and spoil the comparison.
     private var shownTrimDB: Float {
-        settings.autoTrim && settings.eq.isEnabled ? autoTrimDB : settings.inputTrimDB
+        settings.autoTrim ? autoTrimDB : settings.inputTrimDB
     }
 
     private var autoTrimDB: Float {

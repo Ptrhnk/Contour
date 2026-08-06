@@ -168,7 +168,13 @@ struct ProcessingListView: View {
     // MARK: - Mutation
 
     private func bypassBinding(_ item: ProcessingItem) -> Binding<Bool> {
-        Binding(
+        // The EQ's real on/off is `eq.isEnabled`; the row must drive that rather
+        // than the item's own bypass flag, which nothing downstream reads.
+        guard !item.isEQ else {
+            return Binding(get: { settings.wrappedValue.eq.isEnabled },
+                           set: { settings.wrappedValue.eq.isEnabled = $0 })
+        }
+        return Binding(
             get: { !item.isBypassed },
             set: { active in
                 guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
