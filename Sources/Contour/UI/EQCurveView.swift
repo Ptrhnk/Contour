@@ -168,11 +168,19 @@ struct EQCurveView: View {
 
     private func drawHandles(_ context: inout GraphicsContext, geometry: EQGeometry) {
         for (index, band) in settings.bands.enumerated() {
-            let center = position(of: band, geometry: geometry)
             let isSelected = index == selectedBand
-            let radius = isSelected ? handleRadius * 1.2 : handleRadius
-            let circle = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
-                                                width: radius * 2, height: radius * 2))
+            // A disabled band contributes nothing to the curve, so its handle is
+            // only clutter — unless it is the selected one, where a ghost is
+            // what you aim at to bring it back.
+            guard band.isEnabled || isSelected else { continue }
+
+            let center = position(of: band, geometry: geometry)
+            // One size, always. The selected handle used to swell by 20%, which
+            // moved its edge under the pointer mid-drag.
+            let circle = Path(ellipseIn: CGRect(x: center.x - handleRadius,
+                                                y: center.y - handleRadius,
+                                                width: handleRadius * 2,
+                                                height: handleRadius * 2))
             context.fill(circle,
                          with: .color(band.isEnabled
                                       ? .accentColor.opacity(isSelected ? 1 : 0.75)
@@ -197,6 +205,9 @@ struct EQCurveView: View {
     private func nearestBand(to location: CGPoint, geometry: EQGeometry) -> Int? {
         var best: (index: Int, distance: CGFloat)?
         for (index, band) in settings.bands.enumerated() {
+            // Only what is drawn can be grabbed. Hidden disabled bands would
+            // otherwise still win the hit test and be dragged invisibly.
+            guard band.isEnabled || index == selectedBand else { continue }
             let center = position(of: band, geometry: geometry)
             let distance = hypot(center.x - location.x, center.y - location.y)
             if best == nil || distance < best!.distance { best = (index, distance) }

@@ -241,7 +241,8 @@ struct EQWindowView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                     FilterTypePicker(type: band.type,
-                                     iconSize: CGSize(width: 26, height: 18))
+                                     iconSize: CGSize(width: 26, height: 18),
+                                     isSingleRow: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 

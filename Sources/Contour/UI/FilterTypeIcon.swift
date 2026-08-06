@@ -113,18 +113,25 @@ struct FilterTypeIcon: View {
     }
 }
 
-/// The six types as shapes, three per row, replacing a dropdown that needed
-/// 190 points to say "High Shelf".
+/// The six types as shapes, replacing a dropdown that needed 190 points to say
+/// "High Shelf".
 struct FilterTypePicker: View {
     @Binding var type: EQBandType
     var iconSize = CGSize(width: 20, height: 14)
+    /// One row where there is width for it — the window — and two where there
+    /// is not, in the popover.
+    var isSingleRow = false
 
-    /// Low end on the top row, high end below, so position carries meaning too.
-    /// The two symmetric filters sit on opposite corners — bell top right, notch
-    /// bottom left — and the two cuts on the other two, which reads better than
-    /// grouping by kind down the columns.
+    /// Two rows: low end on top, high end below, so position carries meaning
+    /// too. The two symmetric filters sit on opposite corners — bell top right,
+    /// notch bottom left — and the two cuts on the other two.
+    ///
+    /// One row: low to high left to right, with the symmetric pair in the
+    /// middle, which is the same reading order the curve itself has.
     private var rows: [[EQBandType]] {
-        [[.lowCut, .lowShelf, .bell], [.notch, .highShelf, .highCut]]
+        isSingleRow
+            ? [[.lowCut, .lowShelf, .bell, .notch, .highShelf, .highCut]]
+            : [[.lowCut, .lowShelf, .bell], [.notch, .highShelf, .highCut]]
     }
 
     var body: some View {
