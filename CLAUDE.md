@@ -479,9 +479,13 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v0.7.0 on `au-hosting` — build-order steps 1–6 done. Step 7
+**Current state: v0.8.0 on `au-hosting` — build-order steps 1–6 done. Step 7
 (the process-tap backend) not started.** `main` sits at v0.6.0, the EQ-only
 release.
+
+Not 1.0 yet, deliberately: the spec's v1 includes the tap backend, and plugin
+hosting has only just stopped freezing. Version 1 wants step 7 done and the
+plugin path to have survived real use.
 
 Version lives in `Resources/Info.plist` as `CFBundleShortVersionString` and is
 shown beside the name in the popover. Tagged releases mark states worth

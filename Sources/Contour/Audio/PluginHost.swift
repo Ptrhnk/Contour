@@ -3,6 +3,11 @@ import os
 
 /// One instantiated effect, ready to render.
 ///
+/// Known-difficult plugins: SoundID Reference blocks during load and during a
+/// second `requestViewController`. Loading therefore happens off the main actor
+/// with a timeout, and editor windows are kept rather than rebuilt. Neither is
+/// theoretical — both were freezes.
+///
 /// Instantiated **in-process**: out-of-process isolation adds IPC jitter a
 /// realtime insert cannot absorb (§6). Everything expensive — instantiation,
 /// `allocateRenderResources`, buffer allocation — happens here, off the audio
