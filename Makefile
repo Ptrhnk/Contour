@@ -31,12 +31,27 @@ bundle: build
 ## self-signed build to `cdhash H"..."` — the hash of that exact binary — so
 ## every rebuild looks like a different app and microphone permission resets.
 ## Pinning to the certificate instead keeps the grant across rebuilds.
+##
+## `make IDENTITY=- ...` signs ad-hoc instead, for anyone who would rather not
+## make a certificate. Same entitlements, same hardened runtime, and the app
+## runs identically — but the DR falls back to the cdhash, so the microphone
+## grant dies on the next rebuild. Fine if you build once; painful if you are
+## editing the code. Recover with:
+##     tccutil reset Microphone com.nahak.contour
 sign: bundle
+ifeq ($(IDENTITY),-)
+	@codesign --force --options runtime \
+		--entitlements "$(ENTITLEMENTS)" \
+		--sign - \
+		"$(APP)" && \
+	echo "signed ad-hoc; the microphone grant will reset on the next rebuild"
+else
 	@hash=$$(security find-identity -v -p codesigning \
 		| grep '"$(IDENTITY)"' | head -1 | awk '{print $$2}'); \
 	if [ -z "$$hash" ]; then \
 		echo "error: no code-signing identity named \"$(IDENTITY)\" in the keychain"; \
-		echo "see README: create a self-signed certificate with that name"; \
+		echo "see README: create a self-signed certificate with that name,"; \
+		echo "or sign ad-hoc instead with: make IDENTITY=- run"; \
 		exit 1; \
 	fi; \
 	codesign --force --options runtime \
@@ -46,6 +61,7 @@ sign: bundle
 		-r="designated => identifier \"$(BUNDLE_ID)\" and certificate leaf = H\"$$hash\"" \
 		"$(APP)" && \
 	echo "signed as \"$(IDENTITY)\", requirement pinned to certificate $$hash"
+endif
 
 run: sign
 	-@killall $(APP_NAME) 2>/dev/null || true

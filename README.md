@@ -26,9 +26,6 @@ popover and in a resizable window. AU plugin hosting with a reorderable
 processing list — the EQ is an item in it. Presets, AutoEq `ParametricEQ.txt`
 import/export, undo/redo, peak-hold meters, launch at login with crash restart.
 
-Not there yet: global hotkey, scroll-wheel-for-Q, 31-band mode, spectrum
-analyser.
-
 ~1.7% of one core and 80 MB with no plugins; 250–400 MB with a room-correction
 plugin per chain.
 
@@ -43,17 +40,25 @@ plugin per chain.
 
 ## Build
 
-### 1. Signing certificate (once)
+### 1. Signing certificate (once, five minutes)
 
-Not optional. macOS keys the microphone grant to bundle ID **plus signing
-identity**, so without a stable identity every rebuild looks like a new app and
-permission resets — or is silently denied.
+macOS keys the microphone grant to bundle ID **plus signing identity**, so
+without a stable identity every rebuild looks like a new app and permission
+resets — or is silently denied.
 
 In **Keychain Access** → *Certificate Assistant* → *Create a Certificate…*:
 name **`Contour Dev`** (the Makefile looks for that name), *Self Signed Root*,
 type **Code Signing**. Check it with
 `security find-identity -v -p codesigning`. Another name works via
 `make IDENTITY="Your Name"`.
+
+**Or skip it:** `make IDENTITY=- run` signs ad-hoc. Same entitlements, same
+hardened runtime, the app behaves identically — but the designated requirement
+falls back to the binary's own hash, so the microphone grant dies on the *next*
+rebuild and Contour goes silent with no error. Recover with
+`tccutil reset Microphone com.nahak.contour`, relaunch, grant again. Fine if
+you build once and use it; the certificate is worth the five minutes if you
+intend to touch the code.
 
 ### 2. Build
 
@@ -63,7 +68,7 @@ make verify   # signing authority, requirement, entitlements
 swift test    # 40 DSP tests
 ```
 
-`make verify`'s designated requirement must read
+With a certificate, `make verify`'s designated requirement must read
 `designated => identifier "com.nahak.contour" and certificate leaf = H"…"` and
 **not** a bare `cdhash H"…"` — a cdhash pins it to that one binary and resets
 the microphone grant on every rebuild. Choose **Always Allow** when the first
