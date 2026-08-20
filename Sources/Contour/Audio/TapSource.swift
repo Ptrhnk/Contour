@@ -16,16 +16,24 @@ final class TapSource: AudioSource {
     private let chainAPairIndex: Int
     private let chainBPairIndex: Int?
 
+    /// Apps left out of the capture. Their audio never enters Contour and is
+    /// never muted, so it reaches the interface by whatever route the app itself
+    /// uses — which for a DAW doing its own room calibration is the only correct
+    /// answer.
+    private let excludedBundleIDs: Set<String>
+
     private var tap: ProcessTap?
     private var renderer: AggregateRenderer?
     private var fallbackFormat: AVAudioFormat
 
     init(interface: AudioDevice,
          chainAPairIndex: Int,
-         chainBPairIndex: Int?) {
+         chainBPairIndex: Int?,
+         excludedBundleIDs: Set<String> = []) {
         self.interface = interface
         self.chainAPairIndex = chainAPairIndex
         self.chainBPairIndex = chainBPairIndex
+        self.excludedBundleIDs = excludedBundleIDs
         let rate = interface.sampleRate > 0 ? interface.sampleRate : 44_100
         fallbackFormat = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
     }
@@ -75,8 +83,9 @@ final class TapSource: AudioSource {
         guard renderer == nil else { return }
 
         // Excluding our own process is not optional: without it Contour's own
-        // output is captured and fed back into its input.
-        let tap = try ProcessTap(excluding: [getpid()])
+        // output is captured and fed back into its input. The user's exclusions
+        // ride along in the same list.
+        let tap = try ProcessTap(excluding: [getpid()], bundleIDs: excludedBundleIDs)
         self.tap = tap
 
         let aggregate: AggregateDevice

@@ -125,6 +125,29 @@ final class AudioEngine {
         }
     }
 
+    /// Apps whose audio must not pass through Contour at all, by bundle ID.
+    ///
+    /// The tap's exclusion list is the mechanism, and it is exact: an excluded
+    /// app is neither captured nor muted, so its output goes to the hardware by
+    /// its own route with nothing done to it. That is what a DAW doing its own
+    /// room calibration needs — Ableton's correction and Contour's EQ applied in
+    /// series is neither of them.
+    ///
+    /// Two consequences worth knowing. An excluded app plays to whatever device
+    /// and channel pair *it* is configured for, so Contour's destination switch
+    /// does not move it. And on the BlackHole backend this does nothing: there
+    /// is no tap, and an app bypasses Contour there simply by not being pointed
+    /// at BlackHole.
+    var excludedAppBundleIDs: Set<String> = [] {
+        didSet {
+            guard !isLoading, excludedAppBundleIDs != oldValue else { return }
+            defaults.set(Array(excludedAppBundleIDs).sorted(), forKey: Keys.excludedApps)
+            // The exclusion list is baked into the tap at creation, so changing
+            // it means building a new one.
+            if backend == .tap { restart() }
+        }
+    }
+
     var destination: Destination = .both {
         didSet {
             guard !isLoading, destination != oldValue else { return }
@@ -198,6 +221,7 @@ final class AudioEngine {
     private enum Keys {
         static let interfaceUID = "interfaceUID"
         static let backend = "backend"
+        static let excludedApps = "excludedApps"
         static let destination = "destination"
         static let chainA = "chainA"
         static let chainB = "chainB"
@@ -250,6 +274,11 @@ final class AudioEngine {
 
     func eq(for chain: Chain) -> ChainEQ { chain == .a ? eqA : eqB }
 
+    /// The process objects the *running* tap was built to exclude. A tap's
+    /// exclusion list is fixed at creation, so when an excluded app launches or
+    /// quits this set no longer matches reality and the tap has to be rebuilt.
+    private var activeExclusions: Set<AudioObjectID> = []
+
     private var source: (any AudioSource)?
     private var listeners: [PropertyListener] = []
     private var interfaceListeners: [PropertyListener] = []
@@ -261,6 +290,7 @@ final class AudioEngine {
         interfaceUID = defaults.string(forKey: Keys.interfaceUID)
         let savedBackend = defaults.string(forKey: Keys.backend).flatMap(Backend.init(rawValue:))
         backend = savedBackend.map { $0.isSupported ? $0 : .default } ?? .default
+        excludedAppBundleIDs = Set(defaults.stringArray(forKey: Keys.excludedApps) ?? [])
         destination = defaults.string(forKey: Keys.destination)
             .flatMap(Destination.init(rawValue:)) ?? .both
         chainA = load(Keys.chainA) ?? ChainSettings()
@@ -421,7 +451,9 @@ final class AudioEngine {
             }
             source = TapSource(interface: interface,
                                chainAPairIndex: 0,
-                               chainBPairIndex: chainBPairIndex)
+                               chainBPairIndex: chainBPairIndex,
+                               excludedBundleIDs: excludedAppBundleIDs)
+            activeExclusions = Set(AudioProcesses.objects(excluding: excludedAppBundleIDs))
         case .blackHole:
             guard let capture else {
                 setStatus(.waiting("BlackHole 2ch not found. Install it, then reopen this menu."))
@@ -1031,6 +1063,58 @@ final class AudioEngine {
                 queue: listenerQueue) { [weak self] in
                     Task { @MainActor in self?.handleHardwareChange() }
                 })
+        }
+
+        // An excluded app that launches after the tap was built is not in its
+        // exclusion list and would be captured and muted like anything else.
+        // This fires whenever any process registers with the HAL, so the handler
+        // has to be cheap and has to rebuild only when it changes something.
+        listeners.append(PropertyListener(
+            object: system,
+            address: CA.address(kAudioHardwarePropertyProcessObjectList),
+            queue: listenerQueue) { [weak self] in
+                Task { @MainActor in self?.handleProcessListChange() }
+            })
+    }
+
+    /// Rebuild the tap when the set of processes its exclusion list resolves to
+    /// actually changes — not on every process that starts making sound.
+    private func handleProcessListChange() {
+        guard backend == .tap, status.isRunning, !excludedAppBundleIDs.isEmpty else { return }
+        let resolved = Set(AudioProcesses.objects(excluding: excludedAppBundleIDs))
+        guard resolved != activeExclusions else { return }
+        Self.log.notice("""
+            excluded processes changed: \(self.activeExclusions.count, privacy: .public) -> \
+            \(resolved.count, privacy: .public) — rebuilding the tap
+            """)
+        restart()
+    }
+
+    // MARK: - Apps excluded from the capture
+
+    /// Apps that can be excluded: the ones with a Dock icon that are registered
+    /// with the HAL, plus anything already excluded so the choice can be undone.
+    var excludableApps: [ExcludableApp] {
+        AudioProcesses.excludableApps(alwaysIncluding: excludedAppBundleIDs)
+    }
+
+    /// What the closed menu says. Deliberately derived from the persisted bundle
+    /// IDs alone: building the full app list walks the HAL's process table and
+    /// LaunchServices, and the popover's body runs far more often than the menu
+    /// is opened.
+    var excludedSummary: String {
+        switch excludedAppBundleIDs.count {
+        case 0: "None"
+        case 1: AudioProcesses.displayName(for: excludedAppBundleIDs.first!)
+        default: "\(excludedAppBundleIDs.count) apps"
+        }
+    }
+
+    func setExcluded(_ excluded: Bool, bundleID: String) {
+        if excluded {
+            excludedAppBundleIDs.insert(bundleID)
+        } else {
+            excludedAppBundleIDs.remove(bundleID)
         }
     }
 

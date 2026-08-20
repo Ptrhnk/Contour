@@ -216,6 +216,50 @@ Median over blocks is stable to a hundredth.
 one down before building the new one — which it does, since `start()` calls
 `stop()` first.
 
+### Excluding an app from the capture
+
+A DAW that applies its own room calibration must not also go through Contour's
+EQ — the two corrections in series are neither of them. The mechanism was
+already there: `initStereoGlobalTapButExcludeProcesses` takes a list, and
+Contour had only ever put its own PID in it.
+
+Exclusion is exact in both directions — an excluded app is neither captured nor
+muted. Measured, 250 Hz at -6.02 dBFS from a process playing to the 4-output
+SSL 2+, median block peak:
+
+```
+excluded      0.0000   ( -inf dBFS)   not captured, and audible on the interface
+not excluded  0.2500   (-12.04 dBFS)  captured, original path muted
+```
+
+The -12.04 is the documented 0.5 mixdown of a 4-channel system output, which is
+what says the probe was measuring the real path rather than a mistake.
+
+Persisted by **bundle ID**. Process objects and PIDs both change every launch,
+and an exclusion has to survive a restart of Contour *and* of the app it
+excludes. Resolution matches a bundle ID or any dotted extension of one, because
+a browser does not play from the process carrying the app's bundle ID: Chrome
+renders from `com.google.Chrome.helper`, and excluding "Google Chrome" has to
+catch that too.
+
+**A tap's exclusion list is fixed at creation**, so an app launched after the
+tap was built is not in it and gets captured like anything else.
+`kAudioHardwarePropertyProcessObjectList` is watched and the tap rebuilt when
+the *resolved* set changes. Comparing resolved sets rather than acting on the
+notification is the whole point: that property fires whenever any process
+registers with the HAL, and rebuilding the engine each time would be constant.
+
+Two consequences, both intended:
+
+- An excluded app plays to whatever device and channel pair **it** is configured
+  for, so Contour's destination switch does not move it. Ableton on outputs 1/2
+  stays on 1/2 while Contour sends music to 3/4.
+- On the BlackHole backend the list does nothing, and the row is hidden. There
+  is no tap; an app bypasses Contour there by not being pointed at BlackHole.
+
+This is not the per-app processing the non-goals rule out. There is still one
+chain per output pair, and an app is either inside the capture or outside it.
+
 ### Hosting plugins: what cannot be worked around
 
 Plugins are hosted **in-process** deliberately (§6) — out-of-process isolation
@@ -665,6 +709,10 @@ Master bypass on the chain header or the **B** key, right-click on any band
 number to mute it — in both the popover and the window, which is where that
 gesture had been missing.
 
+Per-app exclusion on the tap backend: the popover's **Excluded** row leaves
+chosen apps out of the capture entirely, so a DAW reaches the interface with its
+own calibration and nothing else.
+
 Not there yet: a global hotkey, scroll-wheel-for-Q, 31-band mode, spectrum
 analyser.
 
@@ -694,6 +742,7 @@ Sources/Contour/
   Audio/AudioDevices.swift        enumeration, default output, volume
   Audio/AggregateDevice.swift     aggregate lifecycle + channel mapping
   Audio/AudioSource.swift         AudioSource protocol, RenderBuffers
+  Audio/AudioProcesses.swift      HAL process table, exclusions by bundle ID
   Audio/BlackHoleSource.swift     Backend B + the IOProc
   Audio/PropertyListener.swift    scoped property listener
   Audio/TripleBuffer.swift        UI → realtime parameter handoff
@@ -702,7 +751,7 @@ Sources/Contour/
 Tests/ContourDSPTests/            swift-testing (XCTest is unavailable, below)
 ```
 
-Run the tests with `swift test`. 23 tests, all passing.
+Run the tests with `swift test`. 40 tests, all passing.
 
 ---
 

@@ -24,14 +24,34 @@ final class ProcessTap {
     private var destroyed = false
     private static let log = Logger(subsystem: "com.nahak.contour", category: "tap")
 
-    /// - Parameter excluding: processes whose audio must not be captured.
-    ///   Contour's own is mandatory, or the render feeds back into itself.
-    init(excluding pids: [pid_t]) throws {
-        let objects = pids.compactMap(Self.processObject(forPID:))
+    /// Which apps this tap was asked to leave alone, by bundle ID.
+    let excludedBundleIDs: Set<String>
+
+    /// - Parameters:
+    ///   - pids: processes whose audio must not be captured. Contour's own is
+    ///     mandatory, or the render feeds back into itself.
+    ///   - bundleIDs: apps to leave out of the capture entirely. An excluded app
+    ///     is neither captured nor muted, so its audio reaches the hardware by
+    ///     its own route, untouched. Measured, 250 Hz at -6.02 dBFS played to a
+    ///     4-output system output device:
+    ///
+    ///     ```
+    ///     excluded      median tap peak 0.0000  (-inf dBFS)    audible, untouched
+    ///     not excluded  median tap peak 0.2500  (-12.04 dBFS)  captured, path muted
+    ///     ```
+    ///
+    ///     Resolution is lenient: a bundle ID matching no live process is
+    ///     dropped rather than throwing, so quitting an excluded app does not
+    ///     take the engine down with it.
+    init(excluding pids: [pid_t], bundleIDs: Set<String> = []) throws {
+        var objects = pids.compactMap(Self.processObject(forPID:))
         guard objects.count == pids.count else {
             throw CA.Failure(status: nil,
                              what: "could not translate every PID to an audio process object")
         }
+        excludedBundleIDs = bundleIDs
+        objects.append(contentsOf: AudioProcesses.objects(excluding: bundleIDs)
+            .filter { !objects.contains($0) })
 
         // The refined ObjC name: Swift gets no nicer spelling for this.
         let description = CATapDescription(
@@ -48,7 +68,11 @@ final class ProcessTap {
         }
         id = tapID
         uuid = description.uuid.uuidString
-        Self.log.notice("tap \(tapID, privacy: .public) created")
+        let excludedList = bundleIDs.sorted().joined(separator: ", ")
+        Self.log.notice("""
+            tap \(tapID, privacy: .public) created, excluding \
+            \(objects.count, privacy: .public) process objects \(excludedList, privacy: .public)
+            """)
     }
 
     func destroy() {

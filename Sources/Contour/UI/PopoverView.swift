@@ -186,6 +186,12 @@ struct PopoverView: View {
                     .help(engine.backend.requirement)
                 }
             }
+            if engine.backend == .tap {
+                GridRow {
+                    Text("Excluded").gridLabel()
+                    ExcludedAppsMenu(engine: engine)
+                }
+            }
             GridRow {
                 Text("Interface").gridLabel()
                 Picker("", selection: interfaceSelection) {

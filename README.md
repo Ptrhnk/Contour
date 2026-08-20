@@ -120,6 +120,11 @@ tap.
   menu, `*` means unsaved. Plugin state is opaque binary, so presets only
   restore where the same plugins are installed; the shareable artefact is the
   curve alone, as AutoEq text.
+- **Excluded** — tap backend only: apps left out of the capture entirely.
+  Their audio is neither processed nor muted, so it reaches the interface
+  untouched — what a DAW applying its own room calibration needs. An excluded
+  app plays to the device and output pair *it* is set to, so the destination
+  switch does not move it.
 - **Undo / redo** — ⌘Z, ⇧⌘Z in the EQ window.
 - **At login** — one launchd agent that also restarts after a crash. Turn it off
   while working on the code, or `killall Contour` looks like a crash.
