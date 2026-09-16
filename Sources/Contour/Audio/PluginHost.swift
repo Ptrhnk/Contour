@@ -105,8 +105,8 @@ final class PluginHost: @unchecked Sendable {
     private static func instantiate(_ descriptor: AudioUnitDescriptor) async throws -> AUAudioUnit {
         do {
             return try await withTimeout(instantiationTimeout) {
-                try await AUAudioUnit.instantiate(
-                    with: descriptor.audioComponentDescription,
+                try await instantiateOnMainThread(
+                    descriptor.audioComponentDescription,
                     options: [.loadInProcess])
             }
         } catch {
@@ -116,10 +116,48 @@ final class PluginHost: @unchecked Sendable {
                 retrying out-of-process, which adds IPC jitter
                 """)
             return try await withTimeout(instantiationTimeout) {
-                try await AUAudioUnit.instantiate(
-                    with: descriptor.audioComponentDescription, options: [])
+                try await instantiateOnMainThread(
+                    descriptor.audioComponentDescription, options: [])
             }
         }
+    }
+
+    /// Constructs the unit **on the main thread**, whatever thread asked for it.
+    ///
+    /// SoundID Reference deadlocks otherwise, and measurably: it takes an
+    /// internal `recursive_mutex` while constructing and at the same moment
+    /// schedules work onto the host's main run loop that wants that same mutex.
+    /// Constructed on the main thread the second acquisition is re-entrant and
+    /// passes straight through. Constructed anywhere else it is a cross-thread
+    /// wait, and the constructing thread and the main thread stop dead against
+    /// each other — the main thread inside `CFRunLoopDoSource0`, the loader
+    /// inside `AUAudioUnitV2Bridge init`, both in `__psynch_mutexwait`.
+    ///
+    /// Measured over repeated runs, with a stereo global tap running and no
+    /// saved plugin state involved:
+    ///
+    ///     main thread        instantiated in 0.21-0.26 s, every time
+    ///     background thread  deadlock, every time
+    ///
+    /// This is why the load is no longer merely "off the main actor". That kept
+    /// the main thread free in principle, but for this plugin it is precisely
+    /// what hangs it.
+    private static func instantiateOnMainThread(
+        _ description: AudioComponentDescription,
+        options: AudioComponentInstantiationOptions
+    ) async throws -> AUAudioUnit {
+        let box: UncheckedBox<AUAudioUnit> = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                AUAudioUnit.instantiate(with: description, options: options) { unit, error in
+                    if let unit {
+                        continuation.resume(returning: UncheckedBox(unit))
+                    } else {
+                        continuation.resume(throwing: error ?? PluginError.unsupportedFormat)
+                    }
+                }
+            }
+        }
+        return box.value
     }
 
     /// Races the work against a sleep. The losing task is cancelled, though a

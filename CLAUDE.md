@@ -267,10 +267,25 @@ adds IPC jitter a realtime insert cannot absorb. The consequence is that a badly
 behaved plugin is Contour's problem. Three mitigations are in place and each was
 a real freeze, not a precaution:
 
-- **Loading runs off the main actor, with a 20 s timeout.** Loading calls into
-  the plugin's own code, which can block indefinitely. On the main actor that is
-  a frozen app, and because chains are restored at launch, a saved chain
-  containing such a plugin froze on *every start* with no way in to remove it.
+- **Instantiation is hopped onto the main thread, with a 20 s timeout.**
+  SoundID Reference deadlocks anywhere else: it holds an internal
+  `recursive_mutex` while constructing and at the same moment schedules work
+  onto the host's main run loop that wants that same mutex. On the main thread
+  the second acquisition is re-entrant and passes straight through; on any other
+  thread it is a cross-thread wait and both sides stop dead — the main thread
+  inside `CFRunLoopDoSource0`, the loader inside `AUAudioUnitV2Bridge init`,
+  both in `__psynch_mutexwait`. Measured, with no saved plugin state involved:
+
+      main thread        instantiated in 0.21-0.26 s, every time
+      background thread  deadlock, every time
+
+  This inverts the earlier rule, which was to load entirely off the main actor
+  so that a plugin blocking inside its own load could not freeze the app. For a
+  saved chain holding this plugin that is precisely what froze it, on *every
+  start*, with no way in to remove it. `allocateRenderResources` and the buffer
+  allocation still run off the main actor; only the construction call is hopped.
+  The timeout wraps instantiation alone, and a plugin blocking inside its own
+  load still does not honour cancellation — it frees *us*, not it.
 - **Editor windows are kept, never rebuilt.** Closing one used to drop it, so
   reopening asked the unit for a second `requestViewController` — which some
   plugins do not survive.
@@ -285,8 +300,11 @@ component accepts `.loadOutOfProcess` and is bridged in-process regardless, so
 the option reports success while changing nothing. It also schedules heavy work
 onto the host's main run loop — visible in a sample as
 `CFRunLoopDoSource0 → SoundID Reference Plugin → _platform_memmove` on the main
-thread — which no amount of care on our side prevents. Using its own Systemwide
-driver instead of hosting the plugin is a legitimate answer.
+thread. That work cannot be prevented from here, but it is survivable: what made
+it fatal was constructing the unit off the main thread, which deadlocks against
+it (above). Hosted correctly the plugin restores its 3.7 MB saved state and
+joins the chain in 1.53 s. Using its own Systemwide driver instead of hosting
+the plugin remains a legitimate answer.
 
 ### Microphone TCC — the trap that cost an afternoon
 
