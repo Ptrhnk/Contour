@@ -81,16 +81,52 @@ struct ProcessingItem: Codable, Equatable, Sendable, Identifiable {
     var id: UUID
     var kind: Kind
     var isBypassed: Bool
-    /// `fullStateForDocument`, opaque binary. Only restores where the same
-    /// plugin is installed, which is why presets are personal configuration
-    /// rather than something to share (§6a).
-    var state: Data?
+    /// Reference into `PluginStateStore` — the SHA-256 of the plugin's
+    /// `fullStateForDocument`. The blob is opaque binary and only restores
+    /// where the same plugin is installed, which is why presets are personal
+    /// configuration rather than something to share (§6a).
+    ///
+    /// A reference rather than the bytes because this struct is compared and
+    /// re-encoded on every UI change, and the bytes run to megabytes.
+    var stateRef: String?
 
-    init(id: UUID = UUID(), kind: Kind, isBypassed: Bool = false, state: Data? = nil) {
+    init(id: UUID = UUID(), kind: Kind, isBypassed: Bool = false, stateRef: String? = nil) {
         self.id = id
         self.kind = kind
         self.isBypassed = isBypassed
-        self.state = state
+        self.stateRef = stateRef
+    }
+
+    /// `state` is the pre-store spelling, carrying the blob inline. Settings
+    /// and presets written then are migrated on read: the blob moves into the
+    /// store and the next save writes a reference, so the inline copy goes
+    /// away on its own without a migration pass to run or to get wrong.
+    enum CodingKeys: String, CodingKey {
+        case id, kind, isBypassed, stateRef, state
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        isBypassed = try container.decodeIfPresent(Bool.self, forKey: .isBypassed) ?? false
+        if let reference = try container.decodeIfPresent(String.self, forKey: .stateRef) {
+            stateRef = reference
+        } else if let inline = try container.decodeIfPresent(Data.self, forKey: .state) {
+            stateRef = PluginStateStore.store(inline)
+        } else {
+            stateRef = nil
+        }
+    }
+
+    /// Writes the reference only. The legacy `state` key is not re-emitted, so
+    /// the first save after an upgrade is what shrinks the stored settings.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(isBypassed, forKey: .isBypassed)
+        try container.encodeIfPresent(stateRef, forKey: .stateRef)
     }
 
     var isEQ: Bool { if case .eq = kind { return true } else { return false } }

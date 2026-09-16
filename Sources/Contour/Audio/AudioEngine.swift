@@ -297,6 +297,7 @@ final class AudioEngine {
         chainB = load(Keys.chainB) ?? ChainSettings()
         loadedPresetA = defaults.string(forKey: Keys.presetA).flatMap(UUID.init(uuidString:))
         loadedPresetB = defaults.string(forKey: Keys.presetB).flatMap(UUID.init(uuidString:))
+        sweepPluginStates()
         isLoading = false
         publishParameters()
         publishEQ()
@@ -621,7 +622,9 @@ final class AudioEngine {
                     // same preset twice would keep whatever was tweaked in
                     // between. Callers capture live state before mutating the
                     // list, so this never overwrites unsaved work.
-                    if let state = item.state { existing.fullState = state }
+                    if let state = item.stateRef.flatMap(PluginStateStore.load) {
+                        existing.fullState = state
+                    }
                     return existing
                 }
                 do {
@@ -635,7 +638,7 @@ final class AudioEngine {
                                              sampleRate: sampleRate,
                                              maximumFrames: frames)
                     }.value
-                    created.fullState = item.state
+                    created.fullState = item.stateRef.flatMap(PluginStateStore.load)
                     hosts[item.id] = created
                     return created
                 } catch {
@@ -722,13 +725,30 @@ final class AudioEngine {
         for index in settings.processing.indices {
             let item = settings.processing[index]
             guard !item.isEQ, let host = liveHosts[chain]?[item.id] else { continue }
-            let state = host.fullState
-            if state != item.state {
-                settings.processing[index].state = state
+            // Compare references, not blobs. This ran a megabyte-wide `==`
+            // on every capture, and capture is on the quit path.
+            let reference = host.fullState.flatMap(PluginStateStore.store)
+            if reference != item.stateRef {
+                settings.processing[index].stateRef = reference
                 changed = true
             }
         }
         if changed { setSettings(settings, for: chain) }
+    }
+
+    /// Drops stored plugin states that neither chain nor any preset still
+    /// points at. Runs once, at the end of `init`, by which point both chains
+    /// and the preset library have been read — including any migrated from the
+    /// inline spelling, which must be counted as referenced or the migration
+    /// would delete what it had just written.
+    private func sweepPluginStates() {
+        var referenced = Set<String>()
+        for settings in [chainA, chainB] + presets.presets.map(\.settings) {
+            for item in settings.processing {
+                if let reference = item.stateRef { referenced.insert(reference) }
+            }
+        }
+        PluginStateStore.collectGarbage(keeping: referenced)
     }
 
     func pluginHost(for item: ProcessingItem, chain: Chain) -> PluginHost? {
