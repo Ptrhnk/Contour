@@ -293,11 +293,17 @@ final class AudioEngine {
         excludedAppBundleIDs = Set(defaults.stringArray(forKey: Keys.excludedApps) ?? [])
         destination = defaults.string(forKey: Keys.destination)
             .flatMap(Destination.init(rawValue:)) ?? .both
-        chainA = load(Keys.chainA) ?? ChainSettings()
-        chainB = load(Keys.chainB) ?? ChainSettings()
+        let storedA: ChainSettings? = load(Keys.chainA)
+        let storedB: ChainSettings? = load(Keys.chainB)
+        chainA = storedA ?? ChainSettings()
+        chainB = storedB ?? ChainSettings()
         loadedPresetA = defaults.string(forKey: Keys.presetA).flatMap(UUID.init(uuidString:))
         loadedPresetB = defaults.string(forKey: Keys.presetB).flatMap(UUID.init(uuidString:))
         sweepPluginStates()
+        // Only what was actually read: a decode that failed and fell back to
+        // defaults must not overwrite the settings it could not read.
+        if storedA != nil { normalizeStored(chainA, forKey: Keys.chainA) }
+        if storedB != nil { normalizeStored(chainB, forKey: Keys.chainB) }
         isLoading = false
         publishParameters()
         publishEQ()
@@ -734,6 +740,22 @@ final class AudioEngine {
             }
         }
         if changed { setSettings(settings, for: chain) }
+    }
+
+    /// Writes a chain back in the current format, so a record that still holds
+    /// a plugin blob inline retires itself.
+    ///
+    /// Decoding migrates the blob into `PluginStateStore`, but only in memory.
+    /// Without this the stored record keeps its inline copy — 3.7 MB of it, for
+    /// a chain holding SoundID Reference — until the user happens to change
+    /// something, and every launch until then re-hashes 2.8 MB to arrive at a
+    /// reference it already had.
+    ///
+    /// Not conditional on having migrated anything: telling whether the record
+    /// needed rewriting means encoding it to compare, which is the whole cost
+    /// of just writing it. In the current format that is about a kilobyte.
+    private func normalizeStored(_ settings: ChainSettings, forKey key: String) {
+        save(settings, forKey: key)
     }
 
     /// Drops stored plugin states that neither chain nor any preset still
