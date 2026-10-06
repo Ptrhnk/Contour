@@ -4,10 +4,12 @@ CONFIG       ?= release
 IDENTITY     ?= Contour Dev
 ENTITLEMENTS := Contour.entitlements
 INFO_PLIST   := Resources/Info.plist
+ICON         := Resources/AppIcon.icns
 BUILD_DIR    := build
 APP          := $(BUILD_DIR)/$(APP_NAME).app
+INSTALL_DIR  ?= /Applications
 
-.PHONY: all build bundle sign run verify clean
+.PHONY: all build bundle sign run install icon verify clean
 
 all: sign
 
@@ -23,6 +25,7 @@ bundle: build
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"; \
 	cp "$$bin" "$(APP)/Contents/MacOS/$(APP_NAME)"; \
 	cp "$(INFO_PLIST)" "$(APP)/Contents/Info.plist"; \
+	cp "$(ICON)" "$(APP)/Contents/Resources/AppIcon.icns"; \
 	echo "assembled $(APP)"
 
 ## Sign with a stable identity AND an explicitly pinned designated requirement.
@@ -66,6 +69,35 @@ endif
 run: sign
 	-@killall $(APP_NAME) 2>/dev/null || true
 	open "$(APP)"
+
+## Copy the signed app to /Applications, where Finder, Launchpad and Spotlight
+## find it. The signature and its pinned requirement travel with the bundle, so
+## the microphone grant carries over.
+##
+## SIGTERM goes through NSApp.terminate and exits zero, which the watchdog does
+## not respawn, so the installed copy is the one that starts and it repoints the
+## watchdog at itself on launch. Not an Apple Event quit: that times out while
+## one of the popover's menus is open.
+install: sign
+	-@killall $(APP_NAME) 2>/dev/null || true
+	@for i in $$(seq 50); do pgrep -qx $(APP_NAME) || break; sleep 0.1; done
+	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
+	ditto "$(APP)" "$(INSTALL_DIR)/$(APP_NAME).app"
+	open "$(INSTALL_DIR)/$(APP_NAME).app"
+
+## Regenerate Resources/AppIcon.icns from scripts/make-icon.swift.
+icon:
+	@tmp=$$(mktemp -d); set -e; \
+	swift scripts/make-icon.swift "$$tmp/icon.png"; \
+	mkdir "$$tmp/AppIcon.iconset"; \
+	for s in 16 32 128 256 512; do \
+		sips -z $$s $$s "$$tmp/icon.png" --out "$$tmp/AppIcon.iconset/icon_$${s}x$${s}.png" >/dev/null; \
+		d=$$((s * 2)); \
+		sips -z $$d $$d "$$tmp/icon.png" --out "$$tmp/AppIcon.iconset/icon_$${s}x$${s}@2x.png" >/dev/null; \
+	done; \
+	iconutil -c icns "$$tmp/AppIcon.iconset" -o "$(ICON)"; \
+	rm -rf "$$tmp"; \
+	echo "wrote $(ICON)"
 
 verify:
 	@echo "=== signing authority ==="

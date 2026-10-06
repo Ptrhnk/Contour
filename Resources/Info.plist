@@ -6,6 +6,8 @@
 	<string>Contour</string>
 	<key>CFBundleDisplayName</key>
 	<string>Contour</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>Contour</string>
 	<key>CFBundleIdentifier</key>

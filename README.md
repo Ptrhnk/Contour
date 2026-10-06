@@ -64,6 +64,7 @@ intend to touch the code.
 
 ```sh
 make run      # build, bundle, sign, launch
+make install  # same, but from /Applications, so Finder, Launchpad and Spotlight find it
 make verify   # signing authority, requirement, entitlements
 swift test    # 40 DSP tests
 ```
