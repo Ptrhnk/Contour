@@ -836,6 +836,16 @@ final class AudioEngine {
         setLoadedPreset(preset.id, for: chain)
     }
 
+    /// A new preset starting from a clear EQ: the default band layout, every
+    /// gain at 0 dB. Only the EQ is reset — plugins, trim and output gain stay
+    /// as the chain has them. Goes through `setSettings`, so it is undoable.
+    func createPresetWithClearEQ(named name: String, for chain: Chain) {
+        var fresh = settings(for: chain)
+        fresh.eq = EQSettings()
+        setSettings(fresh, for: chain)
+        savePresetAsNew(named: name, from: chain)
+    }
+
     func updateLoadedPreset(from chain: Chain) {
         guard let id = loadedPresetID(for: chain) else { return }
         capturePluginStates(for: chain)

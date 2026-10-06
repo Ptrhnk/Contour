@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Preset menu for one chain, plus save / rename / delete.
+/// Preset menu for one chain, plus new / duplicate / save / rename / delete.
 ///
 /// Naming happens inline rather than in a sheet: the popover is a transient
 /// window and presenting a modal over it fights the dismiss-on-outside-click
@@ -11,7 +11,10 @@ struct PresetBar: View {
 
     private enum Editing: Equatable {
         case none
-        case creating
+        /// Snapshot of the chain as it stands.
+        case duplicating
+        /// Same chain with the EQ cleared.
+        case creatingClear
         case renaming(UUID)
     }
 
@@ -58,7 +61,8 @@ struct PresetBar: View {
                     }
                 }
                 Divider()
-                Button("Save as New…") { beginCreating() }
+                Button("New with Clear EQ…") { beginCreatingClear() }
+                Button(loaded == nil ? "Save as New…" : "Duplicate…") { beginDuplicating() }
                 if let loaded {
                     Button("Rename “\(loaded.name)”…") { beginRenaming(loaded) }
                     Button("Delete “\(loaded.name)”", role: .destructive) {
@@ -91,13 +95,22 @@ struct PresetBar: View {
                     .disabled(!isDirty)
                     .help("Overwrite this preset with the current settings")
             }
+            if loaded != nil {
+                Button {
+                    beginDuplicating()
+                } label: {
+                    Image(systemName: "plus.square.on.square")
+                }
+                .controlSize(.small)
+                .help("Duplicate this preset, including any unsaved changes")
+            }
             Button {
-                beginCreating()
+                beginCreatingClear()
             } label: {
                 Image(systemName: "plus")
             }
             .controlSize(.small)
-            .help("Save the current settings as a new preset")
+            .help("New preset with a clear EQ. Plugins, trim and output gain are kept.")
         }
     }
 
@@ -120,9 +133,16 @@ struct PresetBar: View {
         }
     }
 
-    private func beginCreating() {
+    private func beginDuplicating() {
         draftName = suggestedName()
-        editing = .creating
+        editing = .duplicating
+        nameFocused = true
+    }
+
+    private func beginCreatingClear() {
+        draftName = Self.uniqueName("Preset \(engine.presets.presets.count + 1)",
+                                    avoiding: engine.presets.presets.map(\.name))
+        editing = .creatingClear
         nameFocused = true
     }
 
@@ -136,8 +156,10 @@ struct PresetBar: View {
         let name = draftName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
         switch editing {
-        case .creating:
+        case .duplicating:
             engine.savePresetAsNew(named: name, from: chain)
+        case .creatingClear:
+            engine.createPresetWithClearEQ(named: name, for: chain)
         case .renaming(let id):
             engine.presets.rename(id: id, to: name)
         case .none:
