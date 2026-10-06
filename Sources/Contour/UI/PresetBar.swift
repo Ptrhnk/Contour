@@ -16,6 +16,9 @@ struct PresetBar: View {
         /// Same chain with the EQ cleared.
         case creatingClear
         case renaming(UUID)
+        /// Deleting cannot be undone, so the trash button asks first — inline,
+        /// for the same reason naming is inline.
+        case confirmingDelete(UUID)
     }
 
     @State private var editing: Editing = .none
@@ -27,10 +30,10 @@ struct PresetBar: View {
 
     var body: some View {
         Group {
-            if editing == .none {
-                controls
-            } else {
-                nameEditor
+            switch editing {
+            case .none: controls
+            case .confirmingDelete(let id): deleteConfirmation(id)
+            default: nameEditor
             }
         }
     }
@@ -65,8 +68,8 @@ struct PresetBar: View {
                 Button(loaded == nil ? "Save as New…" : "Duplicate…") { beginDuplicating() }
                 if let loaded {
                     Button("Rename “\(loaded.name)”…") { beginRenaming(loaded) }
-                    Button("Delete “\(loaded.name)”", role: .destructive) {
-                        engine.deletePreset(loaded.id)
+                    Button("Delete “\(loaded.name)”…", role: .destructive) {
+                        editing = .confirmingDelete(loaded.id)
                     }
                 }
             } label: {
@@ -95,7 +98,14 @@ struct PresetBar: View {
                     .disabled(!isDirty)
                     .help("Overwrite this preset with the current settings")
             }
-            if loaded != nil {
+            if let loaded {
+                Button {
+                    editing = .confirmingDelete(loaded.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .controlSize(.small)
+                .help("Delete this preset")
                 Button {
                     beginDuplicating()
                 } label: {
@@ -133,6 +143,25 @@ struct PresetBar: View {
         }
     }
 
+    private func deleteConfirmation(_ id: UUID) -> some View {
+        HStack(spacing: 6) {
+            Text("Delete “\(engine.presets.preset(id: id)?.name ?? "preset")”?")
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button("Cancel") { editing = .none }
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+            Button("Delete", role: .destructive) {
+                engine.deletePreset(id)
+                editing = .none
+            }
+            .controlSize(.small)
+            .keyboardShortcut(.defaultAction)
+        }
+    }
+
     private func beginDuplicating() {
         draftName = suggestedName()
         editing = .duplicating
@@ -162,7 +191,7 @@ struct PresetBar: View {
             engine.createPresetWithClearEQ(named: name, for: chain)
         case .renaming(let id):
             engine.presets.rename(id: id, to: name)
-        case .none:
+        case .none, .confirmingDelete:
             break
         }
         editing = .none
