@@ -83,7 +83,7 @@ struct EQSection: View {
                       || settings.eq.bands.allSatisfy { $0.gainDB == 0 })
             .opacity(settings.eq.isEnabled ? 1 : 0.4)
             .help("Set every band's gain to 0 dB. Frequencies and Q are kept.")
-            AutoEqTransferButton(settings: $settings) { transferMessage = $0 }
+            AutoEqTransferButton(settings: $settings, offersFiles: false) { transferMessage = $0 }
                 .disabled(!settings.eq.isEnabled)
                 .opacity(settings.eq.isEnabled ? 1 : 0.4)
 

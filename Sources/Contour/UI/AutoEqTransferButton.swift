@@ -9,6 +9,10 @@ import SwiftUI
 /// entry points would eventually disagree about what importing does to the trim.
 struct AutoEqTransferButton: View {
     @Binding var settings: ChainSettings
+    /// Off in the popover. It is a transient window that closes the moment an
+    /// open or save panel takes focus, which leaves the panel unable to pick a
+    /// file — so there, file transfer hands over to the EQ window instead.
+    var offersFiles = true
     var onMessage: (String) -> Void
 
     @State private var showing = false
@@ -36,13 +40,20 @@ struct AutoEqTransferButton: View {
         .popover(isPresented: $showing, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 4) {
                 item("Paste AutoEq Text") { importFromClipboard() }
-                item("Open AutoEq File…") { importFromFile() }
+                if offersFiles { item("Open AutoEq File…") { importFromFile() } }
                 Divider()
                 item("Copy as AutoEq Text") { exportToClipboard() }
-                item("Save AutoEq File…") { exportToFile() }
+                if offersFiles {
+                    item("Save AutoEq File…") { exportToFile() }
+                } else {
+                    Divider()
+                    item("Open or Save a File in EQ Window…") {
+                        EQWindowPresenter.shared.show()
+                    }
+                }
             }
             .padding(10)
-            .frame(width: 180)
+            .frame(width: offersFiles ? 180 : 200)
         }
     }
 
