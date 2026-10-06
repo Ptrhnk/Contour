@@ -104,9 +104,13 @@ public struct EQBand: Codable, Equatable, Sendable, Identifiable {
         return band
     }
 
-    /// Mirrors EQ Eight: 1–2 cut/shelf, 3–6 bells, 7–8 shelf/cut.
-    /// The four bells start enabled so a curve can be dragged immediately;
-    /// the outer four are off until asked for.
+    /// EQ Eight's layout with two more bells: 1–2 cut/shelf, 3–8 bells, 9–10
+    /// shelf/cut. Ten because that is what AutoEq emits for Equalizer APO — a
+    /// low shelf, eight peaks and a high shelf — and with fewer bands an
+    /// imported curve loses its last filters.
+    ///
+    /// The first four bells start enabled so a curve can be dragged
+    /// immediately; everything else is off until asked for.
     public static let defaultBands: [EQBand] = [
         EQBand(id: 0, type: .lowCut, frequency: 40, q: 0.7),
         EQBand(id: 1, type: .lowShelf, frequency: 120, q: 0.7),
@@ -114,11 +118,35 @@ public struct EQBand: Codable, Equatable, Sendable, Identifiable {
         EQBand(id: 3, type: .bell, frequency: 800, q: 1.0, isEnabled: true),
         EQBand(id: 4, type: .bell, frequency: 2_500, q: 1.0, isEnabled: true),
         EQBand(id: 5, type: .bell, frequency: 6_000, q: 1.0, isEnabled: true),
-        EQBand(id: 6, type: .highShelf, frequency: 10_000, q: 0.7),
-        EQBand(id: 7, type: .highCut, frequency: 18_000, q: 0.7),
+        EQBand(id: 6, type: .bell, frequency: 500, q: 1.0),
+        EQBand(id: 7, type: .bell, frequency: 4_000, q: 1.0),
+        EQBand(id: 8, type: .highShelf, frequency: 10_000, q: 0.7),
+        EQBand(id: 9, type: .highCut, frequency: 18_000, q: 0.7),
     ]
 
     public static let count = defaultBands.count
+
+    /// Brings saved bands to exactly `count`, numbered by position.
+    ///
+    /// The kernel and the curve cache are sized from `count`, so a saved
+    /// settings record or preset with any other number would leave them out of
+    /// step with the bands. Eight-band records predate the two extra bells,
+    /// which go in where the defaults put them — ahead of the high shelf and
+    /// cut — so every saved band keeps its neighbours.
+    public static func normalized(_ bands: [EQBand]) -> [EQBand] {
+        var result = bands
+        if result.count == 8 {
+            result.insert(contentsOf: defaultBands[6...7], at: 6)
+        }
+        while result.count < count {
+            result.append(defaultBands[result.count])
+        }
+        return result.prefix(count).enumerated().map { index, band in
+            var band = band
+            band.id = index
+            return band
+        }
+    }
 }
 
 /// The whole EQ for one chain.
@@ -139,5 +167,19 @@ public struct EQSettings: Codable, Equatable, Sendable {
         self.isEnabled = isEnabled
         self.bands = bands
         self.adaptiveQ = adaptiveQ
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled, bands, adaptiveQ
+    }
+
+    /// Normalises the band count on the way in, which covers saved chain
+    /// settings and presets alike.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        bands = EQBand.normalized(
+            try container.decodeIfPresent([EQBand].self, forKey: .bands) ?? [])
+        adaptiveQ = try container.decodeIfPresent(Bool.self, forKey: .adaptiveQ) ?? false
     }
 }

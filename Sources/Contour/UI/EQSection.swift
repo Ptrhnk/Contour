@@ -13,6 +13,7 @@ struct EQSection: View {
 
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
+    @AppStorage(BandColors.storageKey) private var colorBands = false
 
     @State private var transferMessage: String?
 
@@ -110,6 +111,9 @@ struct EQSection: View {
                 .opacity(settings.eq.isEnabled ? 1 : 0.4)
                 .help("Q widens as gain approaches zero. Off by default so imported "
                       + "AutoEq and EQ Eight curves keep their exact Q values.")
+
+            BandColorToggle()
+                .controlSize(.small)
         }
     }
 
@@ -128,9 +132,10 @@ struct EQSection: View {
                             .font(.caption.monospacedDigit())
                             .frame(maxWidth: .infinity)
                             .frame(height: 20)
-                            .background(index == selectedBand
-                                        ? Color.accentColor.opacity(0.25)
-                                        : Color.primary.opacity(0.06),
+                            .background(BandColors.selectorFill(
+                                            index, isEnabled: item.isEnabled,
+                                            isSelected: index == selectedBand,
+                                            colored: colorBands),
                                         in: RoundedRectangle(cornerRadius: 4))
                             .foregroundStyle(item.isEnabled ? .primary : .secondary)
                     }

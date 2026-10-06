@@ -21,7 +21,7 @@ Not a product. The repo is the distribution channel — clone it, build it, run 
 Two capture backends, switchable at runtime and level-matched to within 1 dB: a
 muted global **process tap** (default, nothing to install) and **BlackHole 2ch**
 loopback. Destination toggle (Speakers / Headphones / Both), per-chain trim and
-gain, master bypass as a crossfade. 8-band parametric EQ per chain, in the
+gain, master bypass as a crossfade. 10-band parametric EQ per chain, in the
 popover and in a resizable window. AU plugin hosting with a reorderable
 processing list — the EQ is an item in it. Presets, AutoEq `ParametricEQ.txt`
 import/export, undo/redo, peak-hold meters, launch at login with crash restart.
@@ -66,7 +66,7 @@ intend to touch the code.
 make run      # build, bundle, sign, launch
 make install  # same, but from /Applications, so Finder, Launchpad and Spotlight find it
 make verify   # signing authority, requirement, entitlements
-swift test    # 40 DSP tests
+swift test    # 44 DSP tests
 ```
 
 With a certificate, `make verify`'s designated requirement must read

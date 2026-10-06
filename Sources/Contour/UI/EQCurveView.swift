@@ -36,7 +36,7 @@ struct EQGeometry {
 
 /// Holds the cached per-band curves so a drag only recomputes the band it moved.
 ///
-/// Kept on the main actor deliberately: a full rebuild is 8 bands × 256 points
+/// Kept on the main actor deliberately: a full rebuild is 10 bands × 256 points
 /// of biquad magnitude, a few tens of thousands of flops. The expensive thing in
 /// this kind of view is the spectrum analyser behind the curve, and there isn't
 /// one (§5.3).
@@ -45,6 +45,8 @@ struct EQGeometry {
 final class EQCurveModel {
     private let cache = EQCurveCache()
     private(set) var points: [Double] = []
+    /// Each band's own response, for drawing bands in their own colours.
+    private(set) var bandPoints: [[Double]] = []
     private(set) var sampleRate: Double = 44_100
 
     var frequencies: [Double] { cache.frequencies }
@@ -56,6 +58,7 @@ final class EQCurveModel {
                       adaptiveQ: settings.adaptiveQ,
                       sampleRate: sampleRate)
         points = cache.composite
+        bandPoints = cache.bandMagnitudes
     }
 
     func update(bandAt index: Int, settings: EQSettings) {
@@ -65,6 +68,7 @@ final class EQCurveModel {
         }
         cache.update(bandAt: index, band: settings.bands[index], adaptiveQ: settings.adaptiveQ)
         points = cache.composite
+        bandPoints = cache.bandMagnitudes
     }
 }
 
@@ -73,6 +77,8 @@ struct EQCurveView: View {
     @Binding var selectedBand: Int
     var model: EQCurveModel
     var sampleRate: Double
+
+    @AppStorage(BandColors.storageKey) private var colorBands = false
 
     @State private var draggingBand: Int?
     /// The band's values and the cursor position when the drag began. Everything
@@ -119,6 +125,7 @@ struct EQCurveView: View {
 
     private func draw(_ context: inout GraphicsContext, geometry: EQGeometry) {
         drawGrid(&context, geometry: geometry)
+        if colorBands { drawBandCurves(&context, geometry: geometry) }
         drawCurve(&context, geometry: geometry)
         drawHandles(&context, geometry: geometry)
     }
@@ -158,12 +165,46 @@ struct EQCurveView: View {
             if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
         }
 
+        // Coloured bands carry their own fills, and a composite fill on top
+        // of them muddies every colour it crosses.
+        if colorBands {
+            context.stroke(path, with: .color(.primary.opacity(0.85)), lineWidth: 1.5)
+        } else {
+            context.fill(closedToZero(path, geometry: geometry),
+                         with: .color(.accentColor.opacity(0.15)))
+            context.stroke(path, with: .color(.accentColor), lineWidth: 1.5)
+        }
+    }
+
+    /// Each enabled band's own response, filled to 0 dB in its colour, under
+    /// the composite. Reads rows the cache already holds for the composite, so
+    /// it costs drawing only, and only when the curve redraws.
+    private func drawBandCurves(_ context: inout GraphicsContext, geometry: EQGeometry) {
+        let frequencies = model.frequencies
+        guard settings.isEnabled else { return }
+        for (index, band) in settings.bands.enumerated() where band.isEnabled {
+            guard index < model.bandPoints.count,
+                  model.bandPoints[index].count == frequencies.count else { continue }
+            var path = Path()
+            for (point, db) in model.bandPoints[index].enumerated() {
+                let location = CGPoint(x: geometry.x(frequency: frequencies[point]),
+                                       y: geometry.y(db: db))
+                if point == 0 { path.move(to: location) } else { path.addLine(to: location) }
+            }
+            let color = BandColors.color(index)
+            let emphasis = index == selectedBand ? 1.6 : 1.0
+            context.fill(closedToZero(path, geometry: geometry),
+                         with: .color(color.opacity(0.16 * emphasis)))
+            context.stroke(path, with: .color(color.opacity(0.6 * emphasis)), lineWidth: 1)
+        }
+    }
+
+    private func closedToZero(_ path: Path, geometry: EQGeometry) -> Path {
         var fill = path
         fill.addLine(to: CGPoint(x: geometry.size.width, y: geometry.y(db: 0)))
         fill.addLine(to: CGPoint(x: 0, y: geometry.y(db: 0)))
         fill.closeSubpath()
-        context.fill(fill, with: .color(.accentColor.opacity(0.15)))
-        context.stroke(path, with: .color(.accentColor), lineWidth: 1.5)
+        return fill
     }
 
     private func drawHandles(_ context: inout GraphicsContext, geometry: EQGeometry) {
@@ -181,17 +222,24 @@ struct EQCurveView: View {
                                                 y: center.y - handleRadius,
                                                 width: handleRadius * 2,
                                                 height: handleRadius * 2))
+            let fill = colorBands ? BandColors.color(index) : Color.accentColor
             context.fill(circle,
                          with: .color(band.isEnabled
-                                      ? .accentColor.opacity(isSelected ? 1 : 0.75)
+                                      ? fill.opacity(isSelected ? 1 : 0.75)
                                       : .secondary.opacity(0.3)))
             if isSelected {
                 context.stroke(circle, with: .color(.primary.opacity(0.8)), lineWidth: 1.5)
             }
-            context.draw(Text("\(index + 1)")
-                            .font(.system(size: handleRadius * 1.2, weight: .bold))
-                            .foregroundStyle(band.isEnabled ? Color.white : Color.secondary),
-                         at: center)
+            let label = Text("\(index + 1)")
+                .font(.system(size: handleRadius * 1.2, weight: .bold))
+                .foregroundStyle(band.isEnabled ? Color.white : Color.secondary)
+            context.drawLayer { layer in
+                // White on yellow or mint is unreadable without an edge.
+                if colorBands, band.isEnabled {
+                    layer.addFilter(.shadow(color: .black.opacity(0.7), radius: 1))
+                }
+                layer.draw(label, at: center)
+            }
         }
     }
 

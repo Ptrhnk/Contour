@@ -567,11 +567,19 @@ distinction.
 
 ### EQ engine
 
-Eight parametric bands, modelled on Ableton's EQ Eight.
+Ten parametric bands: Ableton's EQ Eight plus two bells. Ten because AutoEq's
+Equalizer APO export is a low shelf, eight peaks and a high shelf, and with
+eight bands every pasted curve lost its last two filters.
+
+Settings and presets saved with eight bands are normalised on decode
+(`EQBand.normalized`, called from `EQSettings.init(from:)`): the two new bells go
+in disabled ahead of the high shelf and cut. The kernel and curve cache are
+sized from `EQBand.count`, so a record with any other count must never reach
+them unnormalised.
 
 - Types: Low/High Shelf, Bell, Low/High Cut, Notch. Freq 20 Hz–20 kHz
   (log-scaled), Gain ±15 dB, Q 0.1–18, per-band enable.
-- Default layout: bands 1–2 shelf/cut, 3–6 bells, 7–8 shelf/cut.
+- Default layout: bands 1–2 cut/shelf, 3–8 bells (3–6 on), 9–10 shelf/cut.
 - Disabled bands are **excluded from the cascade**, not run at unity.
 - Cascade of biquads via `vDSP_biquadmD` — double precision, both channels in
   one call. ~0.3% of one core.
@@ -589,6 +597,12 @@ band 4 recomputes only band 4, then one `vDSP_vadd`. SwiftUI `Canvas`, 30 fps
 cap while dragging, idle otherwise, computed on a background actor — never on
 the audio thread. No spectrum analyser (it is the single most expensive thing
 in Ableton's window).
+
+**Band colours:** a palette toggle beside Adapt. Q switches between the single
+accent colour and one colour per band, Pro-Q style: each enabled band's own
+response filled to 0 dB under a neutral composite. Display-only, stored in
+`UserDefaults` under `colorBands`, shared by popover and window. Costs drawing
+only — the per-band rows already exist in `EQCurveCache` for the composite.
 
 **Interaction:** drag handle = freq/gain; scroll or ⌥-drag = Q; click the
 number = select band; double-click = toggle enabled; ⇧-drag = fine. Numeric
@@ -677,7 +691,7 @@ switch.
 2. **Chain routing.** Destination toggle, per-chain output gain. *At this point
    it already solves the original problem — ship steps 1–2 to yourself before
    starting 3.*
-3. **8-band parametric EQ** on chain B — DSP first, then the curve view.
+3. **Parametric EQ** (8 bands then, 10 now) on chain B — DSP first, then the curve view.
 4. **Menu bar UI.**
 5. **AU hosting**, both chains.
 6. **Presets**, per chain, including the atomic chain swap.
@@ -714,7 +728,7 @@ persisted by default, and an absent `.debug` line looks identical to a dead
 callback.
 
 Also working: destination toggle (Speakers / Headphones / Both), per-chain
-output gain and input trim, 8-band parametric EQ per chain with draggable curve
+output gain and input trim, 10-band parametric EQ per chain with draggable curve
 and Freq/Gain/Q knobs, presets (shared library, per-chain selection), peak-hold
 meters with a never-falling maximum, a large resizable EQ window, launch at
 login with crash restart, and device-aware chain naming.
@@ -773,7 +787,7 @@ Sources/Contour/
 Tests/ContourDSPTests/            swift-testing (XCTest is unavailable, below)
 ```
 
-Run the tests with `swift test`. 40 tests, all passing.
+Run the tests with `swift test`. 44 tests, all passing.
 
 ---
 
@@ -786,5 +800,5 @@ Run the tests with `swift test`. 40 tests, all passing.
 | CanOpener | +30–60 MB |
 | Realistic both-chains total | 250–400 MB |
 
-CPU: 8 stereo biquads is under 0.5% of one core. The curve view costs more than
+CPU: 10 stereo biquads is under 0.5% of one core. The curve view costs more than
 the DSP. Plugins dominate both.

@@ -13,6 +13,7 @@ struct EQWindowView: View {
     @State private var chain: Chain = .a
     @State private var model = EQCurveModel()
     @State private var selectedBand = 2
+    @AppStorage(BandColors.storageKey) private var colorBands = false
     @State private var transferMessage: String?
 
     static let id = "eq-editor"
@@ -165,6 +166,8 @@ struct EQWindowView: View {
                 .controlSize(.small)
                 .disabled(!settings.wrappedValue.eq.isEnabled)
                 .opacity(settings.wrappedValue.eq.isEnabled ? 1 : 0.4)
+            BandColorToggle()
+                .controlSize(.small)
 
             Spacer()
 
@@ -220,9 +223,10 @@ struct EQWindowView: View {
                             .font(.callout.monospacedDigit())
                             .frame(maxWidth: .infinity)
                             .frame(height: 24)
-                            .background(index == selectedBand
-                                        ? Color.accentColor.opacity(0.25)
-                                        : Color.primary.opacity(0.06),
+                            .background(BandColors.selectorFill(
+                                            index, isEnabled: item.isEnabled,
+                                            isSelected: index == selectedBand,
+                                            colored: colorBands),
                                         in: RoundedRectangle(cornerRadius: 5))
                             .foregroundStyle(item.isEnabled ? .primary : .secondary)
                     }

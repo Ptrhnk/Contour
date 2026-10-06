@@ -4,14 +4,15 @@ import Foundation
 /// Cached magnitude response on a fixed log-frequency grid.
 ///
 /// Each band's response is stored separately in dB. The composite is their sum,
-/// because dB adds — so dragging one band recomputes one eighth of the work and
-/// the total is a single `vDSP_vaddD`.
+/// because dB adds — so dragging one band recomputes one band's share of the
+/// work and the total is one `vDSP_vaddD` per band.
 public final class EQCurveCache {
 
     public let frequencies: [Double]
     public private(set) var composite: [Double]
 
-    private var bandMagnitudes: [[Double]]
+    /// One row per band, in dB. Drawn individually when bands are coloured.
+    public private(set) var bandMagnitudes: [[Double]]
     private var sampleRate: Double
     private let pointCount: Int
 
