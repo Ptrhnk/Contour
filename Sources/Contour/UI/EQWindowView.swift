@@ -103,6 +103,7 @@ struct EQWindowView: View {
         .padding(16)
         .frame(minWidth: 720, minHeight: 520)
         .background(WindowConfigurator().frame(width: 0, height: 0))
+        .modifier(FullScreenCapable())
         .onAppear { engine.beginObservingMeters() }
         .onDisappear { engine.endObservingMeters() }
     }
@@ -367,5 +368,16 @@ private extension Array where Element == EQBand {
     subscript(safe index: Int) -> EQBand {
         get { self[Swift.min(Swift.max(index, 0), count - 1)] }
         set { self[Swift.min(Swift.max(index, 0), count - 1)] = newValue }
+    }
+}
+
+/// The other half of full-screen support; see `FullScreenCapableApp`.
+private struct FullScreenCapable: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.windowFullScreenBehavior(.enabled)
+        } else {
+            content
+        }
     }
 }

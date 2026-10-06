@@ -1,11 +1,49 @@
 import AppKit
 import SwiftUI
 
+/// Picks the App type at launch, because the EQ window's full-screen support
+/// is a scene modifier that only exists on macOS 15 and `SceneBuilder` accepts
+/// no `if #available`.
 @main
+enum ContourMain {
+    static func main() {
+        if #available(macOS 15, *) {
+            FullScreenCapableApp.main()
+        } else {
+            ContourApp.main()
+        }
+    }
+}
+
 struct ContourApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
+        ContourScenes.menuBar(delegate)
+        ContourScenes.eqWindow(delegate)
+    }
+}
+
+/// An accessory app's SwiftUI windows get the *associated* window role, which
+/// can join another app's full screen but never take one of its own, so the
+/// green button does nothing. Measured: the principal role alone still leaves
+/// `fullScreenNone` set, and `windowFullScreenBehavior(.enabled)` alone leaves
+/// the window auxiliary; it takes both. Setting `collectionBehavior` from AppKit
+/// does not stick — SwiftUI recomputes it.
+@available(macOS 15, *)
+struct FullScreenCapableApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
+    var body: some Scene {
+        ContourScenes.menuBar(delegate)
+        ContourScenes.eqWindow(delegate)
+            .windowManagerRole(.principal)
+    }
+}
+
+@MainActor
+enum ContourScenes {
+    static func menuBar(_ delegate: AppDelegate) -> some Scene {
         MenuBarExtra {
             PopoverView(engine: delegate.engine, launchAgent: delegate.launchAgent)
         } label: {
@@ -18,9 +56,11 @@ struct ContourApp: App {
                          : "waveform.slash")
         }
         .menuBarExtraStyle(.window)
+    }
 
-        // A real window, so it can be centred and resized — the menu-bar panel
-        // offers no placement control.
+    /// A real window, so it can be centred and resized — the menu-bar panel
+    /// offers no placement control.
+    static func eqWindow(_ delegate: AppDelegate) -> some Scene {
         Window(EQWindowView.windowTitle, id: EQWindowView.id) {
             EQWindowView(engine: delegate.engine)
         }

@@ -460,6 +460,23 @@ Held off by `NSSupportsAutomaticTermination=false` and
 `applicationShouldTerminateAfterLastWindowClosed → false`, and
 `disableAutomaticTermination` at launch. Do not remove any of them.
 
+### Full screen needs two macOS 15 switches
+
+An accessory app's SwiftUI windows get the *associated* window role: able to
+join another app's full screen, never to take their own. The green button and
+`toggleFullScreen` do nothing, silently. Measured on the EQ window:
+
+```
+default                                   associated + fullScreenNone   no
+windowFullScreenBehavior(.enabled)        associated + fullScreenAux    no
+windowManagerRole(.principal)             principal  + fullScreenNone   no
+both                                      principal  + fullScreenPrimary yes
+```
+
+Setting `collectionBehavior` from AppKit does not stick; SwiftUI recomputes it.
+`SceneBuilder` takes no `if #available`, so `ContourMain` picks between two App
+types at launch, and on macOS 14 the window simply stays windowed.
+
 ### Shelf Q, and why the control stops at 1/√2
 
 Measured, high shelf at 8 kHz asking for **+6 dB**:
