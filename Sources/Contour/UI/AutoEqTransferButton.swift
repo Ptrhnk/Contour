@@ -125,16 +125,17 @@ struct AutoEqTransferButton: View {
 /// can reuse it without building a view to call a method on.
 enum AutoEqTransfer {
 
-    /// Also sets the trim from the file's preamp and switches auto-trim off:
-    /// the file states its own and the two would fight. Returns what to tell
-    /// the user.
+    /// Writes the file's preamp into the manual trim but leaves auto-trim as
+    /// it was. AutoEq's preamp is the curve's peak boost, which is what auto
+    /// computes anyway, and switching auto off on every import meant switching
+    /// it back on by hand every time. With auto off, the preamp applies as is.
+    /// Returns what to tell the user.
     @discardableResult
     static func apply(_ text: String, to settings: inout ChainSettings) -> String {
         do {
             let imported = try AutoEqPreset.parse(text)
             settings.eq.bands = AutoEqPreset.bands(from: imported)
             settings.eq.isEnabled = true
-            settings.autoTrim = false
             settings.inputTrimDB = Float(min(max(imported.preampDB,
                                                  Double(ChainSettings.trimRange.lowerBound)), 0))
             guard imported.warnings.isEmpty else {
