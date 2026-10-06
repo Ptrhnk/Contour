@@ -837,11 +837,13 @@ final class AudioEngine {
     }
 
     /// A new preset starting from a clear EQ: the default band layout, every
-    /// gain at 0 dB. Only the EQ is reset — plugins, trim and output gain stay
-    /// as the chain has them. Goes through `setSettings`, so it is undoable.
+    /// gain at 0 dB, with auto-trim on so the curve about to be built cannot
+    /// clip. Plugins and output gain stay as the chain has them. Goes through
+    /// `setSettings`, so it is undoable.
     func createPresetWithClearEQ(named name: String, for chain: Chain) {
         var fresh = settings(for: chain)
         fresh.eq = EQSettings()
+        fresh.autoTrim = true
         setSettings(fresh, for: chain)
         savePresetAsNew(named: name, from: chain)
     }

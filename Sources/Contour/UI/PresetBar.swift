@@ -120,7 +120,7 @@ struct PresetBar: View {
                 Image(systemName: "plus")
             }
             .controlSize(.small)
-            .help("New preset with a clear EQ. Plugins, trim and output gain are kept.")
+            .help("New preset with a clear EQ and auto trim. Plugins and output gain are kept.")
         }
     }
 
