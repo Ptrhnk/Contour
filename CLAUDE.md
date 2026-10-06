@@ -23,6 +23,8 @@ make build     # swift build only
 make bundle    # assemble build/Contour.app
 make sign      # codesign with identity "Contour Dev"
 make run       # sign + relaunch
+make install   # sign, copy to /Applications, relaunch from there
+make icon      # regenerate Resources/AppIcon.icns from scripts/make-icon.swift
 make verify    # print signing authority + embedded entitlements
 make clean
 ```
@@ -440,8 +442,10 @@ two engines building two aggregate devices over the same hardware.
 `applicationWillFinishLaunching` exits duplicates with status 0, so `KeepAlive`
 treats it as a clean exit rather than a crash to recover from.
 
-While the watchdog is enabled, `killall Contour` looks like a crash and the app
-returns in ~3 s, which races `make run`. Turn it off while iterating.
+`killall Contour` (SIGTERM) does **not** trip the watchdog: the signal handler
+runs `NSApp.terminate`, which exits zero. Measured during `make install`: the
+old copy stayed down and the installed one repointed the agent at itself. Only
+a real crash or `kill -9` brings it back, in ~3 s.
 
 ### AppKit will terminate this app if you let it
 
