@@ -204,6 +204,18 @@ struct EQWindowView: View {
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
 
+            Divider().frame(height: 16)
+
+            // The green title-bar button does the same. This exists for the
+            // shortcut: an LSUIElement app has no View menu to carry ⌃⌘F.
+            Button {
+                NSApp.windows.first { $0.title == Self.windowTitle }?.toggleFullScreen(nil)
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .keyboardShortcut("f", modifiers: [.control, .command])
+            .help("Full screen (⌃⌘F)")
+
         }
     }
 

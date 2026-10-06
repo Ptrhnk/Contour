@@ -26,6 +26,10 @@ private final class ConfiguringView: NSView {
         window.level = .normal
         // Follow to whichever Space is in front rather than dragging the user back.
         window.collectionBehavior.insert(.moveToActiveSpace)
+        // An accessory app's windows cannot go full screen unless they say so:
+        // measured, toggleFullScreen is a silent no-op without this, with or
+        // without moveToActiveSpace, and works with it in both cases.
+        window.collectionBehavior.insert(.fullScreenPrimary)
     }
 
     /// `openWindow` alone does not bring an LSUIElement app forward.
