@@ -80,7 +80,7 @@ struct PopoverView: View {
             Text(Bundle.main.shortVersion)
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .help("Contour \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber))")
+                .help("Contour \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber), \(Bundle.main.gitDescribe))")
             Spacer()
             Button {
                 EQWindowPresenter.shared.show()
@@ -415,6 +415,12 @@ extension Bundle {
 
     var buildNumber: String {
         object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+    }
+
+    /// `git describe` at bundle time, stamped by scripts/version.sh. Says
+    /// whether the build is the tag itself or commits past it, and if dirty.
+    var gitDescribe: String {
+        object(forInfoDictionaryKey: "ContourGitDescribe") as? String ?? "unknown source"
     }
 }
 

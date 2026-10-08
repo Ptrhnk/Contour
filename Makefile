@@ -9,7 +9,7 @@ BUILD_DIR    := build
 APP          := $(BUILD_DIR)/$(APP_NAME).app
 INSTALL_DIR  ?= /Applications
 
-.PHONY: all build bundle sign run install icon verify clean
+.PHONY: all build bundle sign run install icon verify version release clean
 
 all: sign
 
@@ -25,6 +25,7 @@ bundle: build
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"; \
 	cp "$$bin" "$(APP)/Contents/MacOS/$(APP_NAME)"; \
 	cp "$(INFO_PLIST)" "$(APP)/Contents/Info.plist"; \
+	scripts/version.sh stamp "$(APP)/Contents/Info.plist"; \
 	cp "$(ICON)" "$(APP)/Contents/Resources/AppIcon.icns"; \
 	echo "assembled $(APP)"
 
@@ -105,6 +106,17 @@ icon:
 	iconutil -c icns "$$tmp/AppIcon.iconset" -o "$(ICON)"; \
 	rm -rf "$$tmp"; \
 	echo "wrote $(ICON)"
+
+## Print the current version, and what `make release` would cut next.
+version:
+	@echo "current $$(scripts/version.sh current)"
+	@echo "next    $$(scripts/version.sh next $(BUMP))"
+
+## Bump Info.plist, commit "chore: version X.Y.Z", and tag vX.Y.Z. The bump is
+## read from commit prefixes since the last tag (feat → minor, `!` → major,
+## otherwise patch); override with BUMP=major|minor|patch|X.Y.Z. Never pushes.
+release:
+	@scripts/version.sh release $(BUMP)
 
 verify:
 	@echo "=== signing authority ==="

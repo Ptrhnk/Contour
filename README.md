@@ -66,6 +66,7 @@ intend to touch the code.
 make run      # build, bundle, sign, launch
 make install  # same, but from /Applications, so Finder, Launchpad and Spotlight find it
 make verify   # signing authority, requirement, entitlements
+make release  # bump the version from commit prefixes, commit and tag (never pushes)
 swift test    # 44 DSP tests
 ```
 

@@ -26,6 +26,8 @@ make run       # sign + relaunch
 make install   # sign, copy to /Applications, relaunch from there
 make icon      # regenerate Resources/AppIcon.icns from scripts/make-icon.swift
 make verify    # print signing authority + embedded entitlements
+make version   # current version, and what `make release` would cut
+make release   # bump Info.plist, commit, tag vX.Y.Z (BUMP=major|minor|patch|X.Y.Z)
 make clean
 ```
 
@@ -717,10 +719,10 @@ switch.
    genuine unknowns.
 8. Text preset import/export, watchdog, channel-pair assignment, polish.
 
-**Current state: v1.2.0 on `main` — build-order steps 1–7 all done.** Every
+**Current state: v2.0.0 on `main` — build-order steps 1–7 all done.** Every
 part of the spec's v1 is in, the tap backend included. Tags run
-`v0.6.0` → `v0.8.0` → `v1.1.0` → `v1.2.0`; there is no v1.0.0, which was
-discussed and never cut.
+`v0.6.0` → `v0.8.0` → `v1.2.0` → `v2.0.0`; there is no v1.0.0, which was
+discussed and never cut, and v1.1.0 was never committed as such.
 
 Both backends are live and switchable at runtime from the popover's Capture
 row. The tap is the default where macOS supports it; if it fails to start,
@@ -730,6 +732,17 @@ downgrade — so fixing the permission and relaunching just works.
 Version lives in `Resources/Info.plist` as `CFBundleShortVersionString` and is
 shown beside the name in the popover. Tagged releases mark states worth
 returning to; `v0.6.0` is the EQ-only app, complete and in daily use.
+
+Versioning is `scripts/version.sh`, behind `make version` and `make release`.
+The last `vX.Y.Z` tag is the source of truth; `make release` reads the commit
+prefixes since it (`type!:` or `BREAKING CHANGE` → major, any `feat` → minor,
+else patch), writes the new version into `Info.plist`, commits
+`chore: version X.Y.Z` and tags it. It never pushes — `git push --follow-tags`.
+The marketing version stays committed so a source download without `.git` still
+reports it. The build number (`CFBundleVersion`, commit count) and
+`ContourGitDescribe` (`git describe --dirty`) are stamped into the *bundled*
+copy only, never the source plist; the popover's version tooltip shows both, so
+a build past its tag or with uncommitted changes says so.
 
 Working: private aggregate build/teardown, verified channel mapping, one IOProc
 doing dry passthrough into both output pairs, microphone TCC handling,
