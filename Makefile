@@ -78,11 +78,18 @@ run: sign
 ## not respawn, so the installed copy is the one that starts and it repoints the
 ## watchdog at itself on launch. Not an Apple Event quit: that times out while
 ## one of the popover's menus is open.
+##
+## The staged copy in build/ is then deleted and unregistered: Spotlight
+## indexes it, and Launchpad and Spotlight showed Contour twice. `bundle`
+## reassembles it from scratch anyway.
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 install: sign
 	-@killall $(APP_NAME) 2>/dev/null || true
 	@for i in $$(seq 50); do pgrep -qx $(APP_NAME) || break; sleep 0.1; done
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	ditto "$(APP)" "$(INSTALL_DIR)/$(APP_NAME).app"
+	$(LSREGISTER) -u "$(APP)" 2>/dev/null || true
+	rm -rf "$(APP)"
 	open "$(INSTALL_DIR)/$(APP_NAME).app"
 
 ## Regenerate Resources/AppIcon.icns from scripts/make-icon.swift.
